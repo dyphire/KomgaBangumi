@@ -65,7 +65,7 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 
 ## 更新日志
 
-[ChangeLog](ChangeLog.md)
+[Changelog](Changelog.md)
 
 ## 许可证
 
