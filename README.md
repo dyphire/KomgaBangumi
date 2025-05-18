@@ -1,8 +1,8 @@
-# KomgaPatcher (Bangumi API)
+# KomgaBangumi
 
-Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token 和失效提示
+Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 
-用于本地 Komga 服务刮削本地漫画，生成 Metadata 和封面
+用于自建 Komga 服务刮削漫画元数据，生成 Metadata 和封面
 
 ## 功能
 
@@ -18,7 +18,7 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 
 1. 确保你已经安装了浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Firefox, Edge, Safari 等均支持) 或兼容的用户脚本管理器
 2. 点击以下链接安装脚本：
-   [![Install KomgaPatcher](https://img.shields.io/badge/Install%20Directly-KomgaPatcher-blue.svg)](https://raw.githubusercontent.com/dyphire/KomgaPatcher/master/KomgaPatcher.user.js)
+   [![Install KomgaPatcher](https://img.shields.io/badge/Install%20Directly-KomgaBangumi-blue.svg)](https://raw.githubusercontent.com/dyphire/KomgaBangumi/master/KomgaBangumi.user.js)
 
 ## 说明
 
@@ -31,7 +31,7 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 * 配置 Komga 服务域名或 `ip:port`地址用于脚本识别
 
   1. 打开油猴 Tampermonkey 的管理面板（Dashboard）
-  2. 找到 KomgaPatcher (Bangumi API) 脚本，点击编辑按钮（铅笔图标）
+  2. 找到 KomgaBangumi 脚本，点击编辑按钮（铅笔图标）
   3. 切换到 "设置" (Settings) 标签页
   4. 找到 "包括/排除 (Includes/Excludes) " 部分
   5. 在 "用户包括 (User includes) " 或 "用户匹配 (User matches) " 中添加您的 Komga 服务域名匹配规则，例如 `https://komga.org/*`
@@ -40,7 +40,7 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 
   1. 在浏览器中访问你的 Komga 服务网址
   2. 点击浏览器工具栏中的 Tampermonkey 图标
-  3. 找到 KomgaPatcher (Bangumi API) 脚本
+  3. 找到 KomgaBangumi 脚本
   4. 选择 "设置 Bangumi Access Token"
   5. 在弹出的对话框中输入您的 Token。留空则清除
 * 在库视图的顶部工具栏会添加 "全库精配" 按钮
@@ -65,7 +65,7 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 
 ## 更新日志
 
-[ChangLog](ChangLog.md)
+[ChangeLog](ChangeLog.md)
 
 ## 许可证
 
