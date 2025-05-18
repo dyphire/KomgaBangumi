@@ -28,20 +28,23 @@ Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定�
 
 ## 使用方法
 
-* 脚本会在 Komga 的系列卡片和系列详情页面的封面上添加 "仅更新元数据" 和 "更新元数据和封面" 按钮
+* 配置 Komga 服务域名或 `ip:port`地址用于脚本识别
+
+  1. 打开油猴 Tampermonkey 的管理面板（Dashboard）
+  2. 找到 KomgaPatcher (Bangumi API) 脚本，点击编辑按钮（铅笔图标）
+  3. 切换到 "设置" (Settings) 标签页
+  4. 找到 "包括/排除 (Includes/Excludes) " 部分
+  5. 在 "用户包括 (User includes) " 或 "用户匹配 (User matches) " 中添加您的 Komga 服务域名匹配规则，例如 `https://komga.org/*`
+  6. 保存设置
+* 配置 Bangumi Access Token **(可选，用于搜索 NSFW 条目)**
+
+  1. 在浏览器中访问你的 Komga 服务网址
+  2. 点击浏览器工具栏中的 Tampermonkey 图标
+  3. 找到 KomgaPatcher (Bangumi API) 脚本
+  4. 选择 "设置 Bangumi Access Token"
+  5. 在弹出的对话框中输入您的 Token。留空则清除
 * 在库视图的顶部工具栏会添加 "全库精配" 按钮
-* 要配置 Bangumi Access Token：
-
-  1. 点击浏览器右上角的 Tampermonkey 图标
-  2. 选择 "设置 Bangumi Access Token"
-  3. 在弹出的对话框中输入您的 Token。留空则清除
-* 需要将脚本中 `host`替换为你 Komga 服务的域名或者 `ip:port`地址
-
-  如果有多个，如本地或者外网，则可以添加多个 `@include`
-
-  ```
-  // @include        *://host/*
-  ```
+* 脚本会在 Komga 的系列卡片和系列详情页面的封面上添加 "仅更新元数据" 和 "更新元数据和封面" 按钮
 
 ## 具体操作
 
