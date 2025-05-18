@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.2.1
+// @version      2.2.2
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -62,10 +62,10 @@ const defaultReqHeaders = { // Renamed to avoid conflict with local var 'default
   'content-type': 'application/json;charset=UTF-8',
 };
 
-const BANGUMI_ACCESS_TOKEN_KEY = 'komga_patcher_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
+const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
 
 const bangumiApiHeaders = {
-    'User-Agent': `KomgaPatcher/${GM_info.script.version} (UserScript; https://github.com/your-repo-or-contact)`,
+    'User-Agent': `KomgaBangumi/${GM_info.script.version} (UserScript; https://github.com/your-repo-or-contact)`,
     'Accept': 'application/json'
     // Authorization 如果令牌存在，将被动态添加
 };
@@ -655,7 +655,7 @@ async function filterSeriesMeta(komgaSeriesId, seriesMeta) {
     // Respect Komga's lock fields
     for (const keyName in seriesMeta) {
         if (komgaMeta[keyName + 'Lock'] === true) {
-             // console.log(`KomgaPatcher: Field "${keyName}" is locked for series ${komgaSeriesId}. Skipping update.`);
+             // console.log(`KomgaBangumi: Field "${keyName}" is locked for series ${komgaSeriesId}. Skipping update.`);
              delete seriesMeta[keyName]; // Remove from payload if locked
              delete seriesMeta[keyName + 'Lock']; // Also remove the lock field itself from payload if it was carried over
         }
@@ -1894,7 +1894,7 @@ function addBatchMatchButtonIfNeeded() {
                 $toolbar.append($btn); // Append if no suitable insertion point found
             }
         } else {
-            console.error("KomgaPatcher: 无法找到工具栏添加批量按钮。");
+            console.error("KomgaBangumi: 无法找到工具栏添加批量按钮。");
         }
     } else {
         // Not a library page, remove button if it exists from a previous page
@@ -1904,7 +1904,7 @@ function addBatchMatchButtonIfNeeded() {
 //</editor-fold>
 
 function main() {
-    console.log("KomgaPatcher (API version) script started. Setting up observer.");
+    console.log("KomgaBangumi script started. Setting up observer.");
     const observer = new MutationObserver(mutations => {
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
@@ -1950,7 +1950,7 @@ function main() {
         if (targetNode) {
              observer.observe(targetNode, { childList: true, subtree: true });
              clearInterval(observerIntervalId);
-             console.log("KomgaPatcher: Observer attached. Performing initial UI checks...");
+             console.log("KomgaBangumi: Observer attached. Performing initial UI checks...");
              // Initial run for elements already on the page
              $('div[class*="v-card"], div.my-2.mx-2, .card-container').each(function() { // Cards in library view
                    const $card = $(this);
@@ -1981,7 +1981,7 @@ function main() {
         GM_registerMenuCommand('设置Bangumi Access Token', setBangumiAccessToken, 'B'); // 'B' 是一个快捷访问键
     }
 
-    console.log("KomgaPatcher main execution finished setting up.");
+    console.log("KomgaBangumi main execution finished setting up.");
 }
 
 // Handle SPA navigation
@@ -1999,7 +1999,7 @@ history.pushState = _wr('pushState');
 history.replaceState = _wr('replaceState');
 
 function handleNavigation() {
-    // console.log("KomgaPatcher: Navigation detected (pushState/popstate), re-evaluating UI elements.");
+    // console.log("KomgaBangumi: Navigation detected (pushState/popstate), re-evaluating UI elements.");
     // Delay slightly to allow Komga's UI to render after navigation
     setTimeout(() => {
         // Buttons on cards/detail view are handled by MutationObserver.
@@ -2012,7 +2012,7 @@ window.addEventListener('pushState', handleNavigation);
 window.addEventListener('popstate', handleNavigation); // Handles browser back/forward
 
 // Initial load
-console.log("KomgaPatcher (API version with Token support & Expiry Hint) initial load, running main setup...");
+console.log("KomgaBangumi initial load, running main setup...");
 setTimeout(() => {
     main();
 }, 700); // Delay main execution slightly to ensure Komga's base UI is more likely to be ready
