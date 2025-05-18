@@ -1,0 +1,2018 @@
+// ==UserScript==
+// @name         KomgaPatcher (Bangumi API)
+// @namespace    https://github.com/dyphire/KomgaPatcher
+// @version      2.1
+// @description  Komga comic server metadata patcher (Using Bangumi API, with custom Access Token support and expiry hint)
+// @author       eeezae, ramu, dyphire
+// @include      http://localhost:25600/*
+// @include      *://在此处填入你的komga地址/*
+// @icon         https://komga.org/img/logo.svg
+// @grant        GM_xmlhttpRequest
+// @grant        GM_download
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
+// @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js
+// @downloadURL  https://github.com/dyphire/KomgaPatcher/master/KomgaPatcher.user.js
+// @updateURL    https://raw.githubusercontent.com/dyphire/KomgaPatcher/master/KomgaPatcher.meta.js
+// @license      MIT
+// ==/UserScript==
+// ✔ 01.Loop page -> All Div nodes [Komga, Get]
+// ✔ 02.Div nodes -> plus two buttons : -> { sync All, sync info } [Komga, Dom]
+// ✔ 03.Div node -> Book id [Komga, Get]
+// ✔ 04.Book id -> { bookInfo, bookList } [Komga, Get]
+// ✔ 05.Book info -> Book name [Komga, Re/Manual✔]
+// ✔ 06.Book name -> Search Book List -> First Book [Pressx, Get]
+// ✔ 07.First Book -> Info {Name, Author, Publisher, Status, Description, Tags, Language}, Covers [Pressx, Get]
+// ✔ 08.Covers -> Blob File
+// ✔ 09.Update Series Info [Komga, Patch]
+// ✔ 10.Update Series Cover [Komga, Post]
+// ✔ 11.Update Book Info {Name Author} [Komga, Patch]
+// ✔ 12.Update Book Cover [Komga, Post]
+// ✔ 13.Fetch Bangumi Aliases [Pressx, Get] -> Add to Alternate Titles [Komga, Patch] (Fixed v1.1)
+// ✔ 14.Publisher Logic: Ignore filename, use Bangumi primary publisher only (v1.2)
+// ✔ 15.Publisher Logic Fix: Ensure only the *first* publisher entry is used (v1.2.1)
+// ✔ 16.Batch Match: Add button to library view for precise matching all series (v1.5)
+// ✔ 17.Batch Match Failures: Add failed series to "手动匹配" collection immediately (v1.6)
+// ✔ 18.Fallback mechanism for adding bgm original title matching in batch matching (v1.7)
+// ✔ 19.Bangumi integration switched to official API (v2.0)
+// ✔ 20.Added Bangumi API Access Token configuration (v2.1)
+
+'use strict';
+
+// 添加loading关键帧
+$('head').append(`
+  <style>
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>`);
+
+const maxReqBooks = 500;
+const sourceLabels = ['Btv', 'Bof']; // Btv now uses API
+const btvApiUrl = 'https://api.bgm.tv';
+const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject links
+const bofUrl = 'https://bookof.moe';
+const tagLabels = '架空,搞笑,热血,运动,恋爱,轻改,后宫,校园,少年,少女,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行，异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,';
+const equalLabels = ['治愈,治癒', '校园欺凌,校园霸凌', '轻改,轻小说改', '工口,色气,卖肉'];
+
+const defaultReqHeaders = { // Renamed to avoid conflict with local var 'defaultHeaders' in asyncReq
+  'content-type': 'application/json;charset=UTF-8',
+};
+
+const BANGUMI_ACCESS_TOKEN_KEY = 'komga_patcher_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
+
+const bangumiApiHeaders = {
+    'User-Agent': `KomgaPatcher/${GM_info.script.version} (UserScript; https://github.com/your-repo-or-contact)`,
+    'Accept': 'application/json'
+    // Authorization 如果令牌存在，将被动态添加
+};
+
+// 获取已存储的Bangumi Access Token的函数
+function getBangumiAccessToken() {
+    return GM_getValue(BANGUMI_ACCESS_TOKEN_KEY, null);
+}
+
+// 通过提示框设置/更新Bangumi Access Token的函数
+function setBangumiAccessToken() {
+    const currentToken = getBangumiAccessToken();
+    const newToken = prompt(
+        "请输入您的 Bangumi API Access Token (用于提高请求频率或访问 NSFW 条目)。\n留空并确定则清除已保存的 Token。\n\n你可以在 https://next.bgm.tv/demo/access-token 生成一个 Access Token",
+        currentToken || ""
+    );
+
+    if (newToken !== null) { // 用户按了确定，而不是取消
+        if (newToken.trim() === "") {
+            GM_deleteValue(BANGUMI_ACCESS_TOKEN_KEY);
+            showMessage("Bangumi Access Token 已清除。", "info");
+        } else {
+            GM_setValue(BANGUMI_ACCESS_TOKEN_KEY, newToken.trim());
+            showMessage("Bangumi Access Token 已保存。", "success");
+        }
+    } else {
+        showMessage("设置Bangumi Access Token操作已取消。", "warning");
+    }
+}
+
+
+const btnStyle = {
+  position: 'absolute',
+  bottom: '10px',
+  'border-radius': '50%',
+  'background-color': 'orange',
+  border: 'none',
+  color: '#efefef',
+  'font-size': '16px',
+  'font-weight': 'bold',
+  'z-index': '10',
+  opacity: '0',
+  'pointer-events': 'none',
+  transition: 'opacity 0.2s ease-in-out',
+  cursor: 'pointer',
+  display: 'flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+};
+
+const maskStyle = {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  'background-color': 'white',
+  opacity: 0.9,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+  'z-index': 5,
+};
+
+const selPanelStyle = {
+  position: 'fixed',
+  top: '50%',
+  left: '50%',
+  transform: 'translate(-50%, -50%)',
+  width: '400px',
+  height: 'auto',
+  maxHeight: '80vh',
+  overflowY: 'auto',
+  backgroundColor: '#f5f5dc',
+  border: '1px solid #ccc',
+  boxShadow: '0 0 10px rgba(0,0,0,0.3)',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+  gap: '10px',
+  padding: '15px',
+  alignItems: 'start',
+  justifyContent: 'center',
+  zIndex: '100',
+  borderRadius: '8px',
+};
+
+const selPanelBtnStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '100%',
+  minWidth: '110px',
+  height: '160px',
+  textAlign: 'center',
+  backgroundColor: '#4CAF50',
+  color: 'white',
+  borderRadius: '10px',
+  padding: '8px',
+  border: 'none',
+  overflow: 'hidden',
+  cursor: 'pointer',
+  fontSize: '14px',
+  wordBreak: 'break-word',
+  transition: 'background-color 0.2s ease',
+};
+selPanelBtnStyle[':hover'] = {
+    backgroundColor: '#45a049',
+};
+
+const $msgBoxes = $('<div>').attr('id', 'msg-boxes').css({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexDirection: 'column',
+  gap: '10px',
+  position: 'fixed',
+  top: '40px',
+  right: 0,
+  width: '500px',
+  height: 'auto',
+  'z-index': '10000',
+});
+
+// ************************************** 工具相关 **************************************
+//<editor-fold desc="工具相关">
+function s2t(cc) { let str = '', ss = jtpy(), tt = ftpy(); for (let i = 0; i < cc.length; i++) { let c = cc.charAt(i); if (c.charCodeAt(0) > 10000 && ss.indexOf(c) !== -1) str += tt.charAt(ss.indexOf(c)); else str += c; } return str; }
+function t2s(cc) { let str = '', ss = jtpy(), tt = ftpy(); for (let i = 0; i < cc.length; i++) { let c = cc.charAt(i); if (c.charCodeAt(0) > 10000 && tt.indexOf(c) !== -1) str += ss.charAt(tt.indexOf(c)); else str += c; } return str; }
+function jtpy() { return '皑蔼碍爱翱袄奥坝罢摆败颁办绊帮绑镑谤剥饱宝报鲍辈贝钡狈备惫绷笔毕毙闭边编贬变辩辫鳖瘪濒滨宾摈饼拨钵铂驳卜补参蚕残惭惨灿苍舱仓沧厕侧册测层诧搀掺蝉馋谗缠铲产阐颤场尝长偿肠厂畅钞车彻尘陈衬撑称惩诚骋痴迟驰耻齿炽冲虫宠畴踌筹绸丑橱厨锄雏础储触处传疮闯创锤纯绰辞词赐聪葱囱从丛凑窜错达带贷担单郸掸胆惮诞弹当挡党荡档捣岛祷导盗灯邓敌涤递缔点垫电淀钓调迭谍叠钉顶锭订东动栋冻斗犊独读赌镀锻断缎兑队对吨顿钝夺鹅额讹恶饿儿尔饵贰发罚阀珐矾钒烦范贩饭访纺飞废费纷坟奋愤粪丰枫锋风疯冯缝讽凤肤辐抚辅赋复负讣妇缚该钙盖干赶秆赣冈刚钢纲岗皋镐搁鸽阁铬个给龚宫巩贡钩沟构购够蛊顾剐关观馆惯贯广规硅归龟闺轨诡柜贵刽辊滚锅国过骇韩汉阂鹤贺横轰鸿红后壶护沪户哗华画划话怀坏欢环还缓换唤痪焕涣黄谎挥辉毁贿秽会烩汇讳诲绘荤浑伙获货祸击机积饥讥鸡绩缉极辑级挤几蓟剂济计记际继纪夹荚颊贾钾价驾歼监坚笺间艰缄茧检碱硷拣捡简俭减荐槛鉴践贱见键舰剑餞渐溅涧浆蒋桨奖讲酱胶浇骄娇搅铰矫侥脚饺缴绞轿较秸阶节茎惊经颈静镜径痉竞净纠厩旧驹举据锯惧剧鹃绢杰洁结诫届紧锦仅谨进晋烬尽劲荆觉决诀绝钧军骏开凯颗壳课垦恳抠库裤夸块侩宽矿旷况亏岿窥馈溃扩阔蜡腊莱来赖蓝栏拦篮阑兰澜谰揽览懒缆烂滥捞劳涝乐镭垒类泪篱离里鲤礼丽厉励砾历沥隶俩联莲连镰怜涟帘敛脸链恋炼练粮凉两辆谅疗辽镣猎临邻鳞凛赁龄铃凌灵岭领馏刘龙聋咙笼垄拢陇楼娄搂篓芦卢颅庐炉掳卤虏鲁赂禄录陆驴吕铝侣屡缕虑滤绿峦挛孪滦乱抡轮伦仑沦纶论萝罗逻锣箩骡骆络妈玛码蚂马骂吗买麦卖迈脉瞒馒蛮满谩猫锚铆贸么霉没镁门闷们锰梦谜弥觅绵缅庙灭悯闽鸣铭谬谋亩钠纳难挠脑恼闹馁腻撵捻酿鸟聂啮镊镍柠狞宁拧泞钮纽脓浓农疟诺欧鸥殴呕沤盘庞国爱赔喷鹏骗飘频贫苹凭评泼颇扑铺朴谱脐齐骑岂启气弃讫牵扦钎铅迁签谦钱钳潜浅谴堑枪呛墙蔷强抢锹桥乔侨翘窍窃钦亲轻氢倾顷请庆琼穷趋区躯驱龋颧权劝却鹊让饶扰绕热韧认纫荣绒软锐闰润洒萨鳃赛伞丧骚扫涩杀纱筛晒闪陕赡缮伤赏烧绍赊摄慑设绅审婶肾渗声绳胜圣师狮湿诗尸时蚀实识驶势释饰视试寿兽枢输书赎属术树竖数帅双谁税顺说硕烁丝饲耸怂颂讼诵擞苏诉肃虽绥岁孙损笋缩琐索獭挞抬摊贪瘫滩坛谭谈叹汤烫涛绦腾誊锑题体屉条贴铁厅听烃铜统头图涂团颓蜕脱鸵驮椭洼袜弯湾顽万网韦违围爲潍维苇伟伪纬谓卫温闻纹稳问乌诬芜吴坞雾务误锡牺习习铣戏细虾辖峡侠狭厦锨鲜纤咸贤衔闲显险现献县馅羡宪线厢镶乡详响项萧销晓啸蝎协挟携胁谐泻谢锌衅兴汹绣绣虚嘘须许绪续轩悬选癣绚学勋询寻驯训讯逊压鸦鸭哑亚讶阉烟盐严颜阎艳厌砚彦谚验鸯杨扬疡阳痒养样瑶摇尧遥窑谣药爷页业叶医铱颐遗仪彝蚁艺亿忆义诣议谊译异绎荫阴银饮樱婴鹰应缨莹萤营荧蝇颖哟拥佣痈踊咏涌优忧邮铀犹游诱舆鱼渔娱与屿语吁御狱誉预驭鸳渊辕园员圆缘远愿约跃钥岳粤悦阅云郧匀陨运蕴酝晕韵杂灾载攒暂赞赃脏凿枣灶责择则泽贼赠扎札轧铡闸诈斋债毡盏斩辗崭栈战绽张涨帐账胀赵蛰辙锗这贞针侦诊镇阵挣睁狰帧郑证织职执纸挚掷帜质钟终种肿众诌轴皱昼骤猪诸诛烛瞩嘱贮铸筑驻专砖转赚桩庄装妆壮状锥赘坠缀谆浊兹资渍踪综总纵邹诅组钻致钟么为只凶准启板里雳余链泄'; }
+function ftpy() { return '皚藹礙愛翺襖奧壩罷擺敗頒辦絆幫綁鎊謗剝飽寶報鮑輩貝鋇狽備憊繃筆畢斃閉邊編貶變辯辮鼈癟瀕濱賓擯餅撥缽鉑駁蔔補參蠶殘慚慘燦蒼艙倉滄廁側冊測層詫攙摻蟬饞讒纏鏟産闡顫場嘗長償腸廠暢鈔車徹塵陳襯撐稱懲誠騁癡遲馳恥齒熾沖蟲寵疇躊籌綢醜櫥廚鋤雛礎儲觸處傳瘡闖創錘純綽辭詞賜聰蔥囪從叢湊竄錯達帶貸擔單鄲撣膽憚誕彈當擋黨蕩檔搗島禱導盜燈鄧敵滌遞締點墊電澱釣調叠諜疊釘頂錠訂東動棟凍鬥犢獨讀賭鍍鍛斷緞兌隊對噸頓鈍奪鵝額訛惡餓兒爾餌貳發罰閥琺礬釩煩範販飯訪紡飛廢費紛墳奮憤糞豐楓鋒風瘋馮縫諷鳳膚輻撫輔賦複負訃婦縛該鈣蓋幹趕稈贛岡剛鋼綱崗臯鎬擱鴿閣鉻個給龔宮鞏貢鈎溝構購夠蠱顧剮關觀館慣貫廣規矽歸龜閨軌詭櫃貴劊輥滾鍋國過駭韓漢閡鶴賀橫轟鴻紅後壺護滬戶嘩華畫劃話懷壞歡環還緩換喚瘓煥渙黃謊揮輝毀賄穢會燴彙諱誨繪葷渾夥獲貨禍擊機積饑譏雞績緝極輯級擠幾薊劑濟計記際繼紀夾莢頰賈鉀價駕殲監堅箋間艱緘繭檢堿鹼揀撿簡儉減薦檻鑒踐賤見鍵艦劍餞漸濺澗漿蔣槳獎講醬膠澆驕嬌攪鉸矯僥腳餃繳絞轎較稭階節莖驚經頸靜鏡徑痙競淨糾廄舊駒舉據鋸懼劇鵑絹傑潔結誡屆緊錦僅謹進晉燼盡勁荊覺決訣絕鈞軍駿開凱顆殼課墾懇摳庫褲誇塊儈寬礦曠況虧巋窺饋潰擴闊蠟臘萊來賴藍欄攔籃闌蘭瀾讕攬覽懶纜爛濫撈勞澇樂鐳壘類淚籬離裏鯉禮麗厲勵礫曆瀝隸倆聯蓮連鐮憐漣簾斂臉鏈戀煉練糧涼兩輛諒療遼鐐獵臨鄰鱗凜賃齡鈴淩靈嶺領餾劉龍聾嚨籠壟攏隴樓婁摟簍蘆盧顱廬爐擄鹵虜魯賂祿錄陸驢呂鋁侶屢縷慮濾綠巒攣孿灤亂掄輪倫侖淪綸論蘿羅邏鑼籮騾駱絡媽瑪碼螞馬罵嗎買麥賣邁脈瞞饅蠻滿謾貓錨鉚貿麽黴沒鎂門悶們錳夢謎彌覓綿緬廟滅憫閩鳴銘謬謀畝鈉納難撓腦惱鬧餒膩攆撚釀鳥聶齧鑷鎳檸獰甯擰濘鈕紐膿濃農瘧諾歐鷗毆嘔漚盤龐國愛賠噴鵬騙飄頻貧蘋憑評潑頗撲鋪樸譜臍齊騎豈啓氣棄訖牽扡釺鉛遷簽謙錢鉗潛淺譴塹槍嗆牆薔強搶鍬橋喬僑翹竅竊欽親輕氫傾頃請慶瓊窮趨區軀驅齲顴權勸卻鵲讓饒擾繞熱韌認紉榮絨軟銳閏潤灑薩鰓賽傘喪騷掃澀殺紗篩曬閃陝贍繕傷賞燒紹賒攝懾設紳審嬸腎滲聲繩勝聖師獅濕詩屍時蝕實識駛勢釋飾視試壽獸樞輸書贖屬術樹豎數帥雙誰稅順說碩爍絲飼聳慫頌訟誦擻蘇訴肅雖綏歲孫損筍縮瑣鎖獺撻擡攤貪癱灘壇譚談歎湯燙濤縧騰謄銻題體屜條貼鐵廳聽烴銅統頭圖塗團頹蛻脫鴕駝橢窪襪彎灣頑萬網韋違圍爲濰維葦偉僞緯謂衛溫聞紋穩問烏誣蕪吳塢霧務誤錫犧襲習銑戲細蝦轄峽俠狹廈鍁鮮纖鹹賢銜閑顯險現獻縣餡羨憲線廂鑲鄉詳響項蕭銷曉嘯蠍協挾攜脅諧寫瀉謝鋅釁興洶鏽繡虛噓須許緒續軒懸選癬絢學勳詢尋馴訓訊遜壓鴉鴨啞亞訝閹煙鹽嚴顔閻豔厭硯彥諺驗鴦楊瘍陽癢養樣瑤搖堯遙窯謠藥爺頁業葉醫銥頤遺儀彜蟻藝億憶義詣議誼譯異繹蔭陰銀飲櫻嬰鷹應纓瑩螢營熒蠅穎喲擁傭癰踴詠湧優憂郵鈾猶遊誘輿魚漁娛與嶼語籲禦獄譽預馭鴛淵轅園員圓緣遠願約躍鑰嶽粵悅閱雲鄖勻隕運蘊醞暈韻雜災載攢暫贊贓髒鑿棗竈責擇則澤賊贈紮劄軋鍘閘詐齋債氈盞斬輾嶄棧戰綻張漲帳賬脹趙蟄轍鍺這貞針偵診鎮陣掙睜猙幀鄭證織職執紙摯擲幟質鍾終種腫衆謅軸皺晝驟豬諸誅燭矚囑貯鑄築駐專磚轉賺樁莊裝妝壯狀錐贅墜綴諄濁茲資漬蹤綜總縱鄒詛組鑽緻鐘麼為隻兇準啟闆裡靂餘鍊洩'; }
+function capitalize(str) { return str ? str.replace(/\b[a-z]/g, (char) => char.toUpperCase()) : ''; }
+//</editor-fold>
+
+// ************************************** Dom加载 **************************************
+//<editor-fold desc="Dom加载">
+function partLoadingStart($dom) {
+  if (!$dom || $dom.length === 0) {
+      console.warn("partLoadingStart: Target DOM element not found.");
+      return;
+  }
+  if ($dom.find('.loadMask').length > 0) return;
+  const $imageDiv = $dom.find('div.v-image').first();
+  const loadingWidth = $imageDiv.length > 0 ? $imageDiv.width() : $dom.width();
+  const loadingHeight = $imageDiv.length > 0 ? $imageDiv.height() : $dom.height();
+  const diameter = Math.min(loadingWidth, loadingHeight) / 3;
+  const $loadMask = $('<div class="loadMask"></div>').css({
+    ...maskStyle,
+    width: loadingWidth,
+    height: loadingHeight,
+  });
+  const $loading = $('<div></div>').css({
+    width: diameter,
+    height: diameter,
+    'border-radius': '50%',
+    border: '5px solid #f3f3f3',
+    'border-top': '5px solid #3498db',
+    animation: 'spin 1s linear infinite',
+  });
+  $loadMask.append($loading);
+  $dom.append($loadMask);
+}
+
+function partLoadingEnd($dom) {
+  if ($dom && $dom.length > 0) {
+    $dom.find('.loadMask').remove();
+  } else {
+      $('.loadMask').remove();
+  }
+}
+
+function loadMessage() {
+  let msgBoxesIntervalId = setInterval(function () {
+    let $app = $('div#app');
+    if ($app.length !== 0) {
+      $app.append($msgBoxes);
+      clearInterval(msgBoxesIntervalId);
+    }
+  }, 200);
+}
+
+function showMessage(msgContent, msgType = 'success', duration = 5000) {
+  let msgBgColor;
+  switch (msgType) {
+    case 'success': msgBgColor = '#4CAF50'; break;
+    case 'warning': msgBgColor = '#ff9800'; break;
+    case 'error': msgBgColor = '#f44336'; break;
+    case 'info': msgBgColor = '#2196F3'; break;
+    default: msgBgColor = '#4CAF50'; break;
+  }
+  let $msgTxt = $('<span>').attr('class', 'message').css({
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    textAlign: 'left', fontSize: '16px', color: '#ffffff',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontWeight: 'bold',
+  });
+  $msgTxt.text(msgContent);
+  let $msgBox = $('<div>').attr('class', 'message-box').append($msgTxt).css({
+    height: 'auto', minHeight: '46px',
+    width: '360px', borderRadius: '4px',
+    transform: 'translateX(110%)',
+    backgroundColor: msgBgColor,
+    boxShadow: '0 0 10px rgba(0,0,0,0.3)',
+    padding: '10px 15px',
+    zIndex: '9999',
+    transition: 'transform 0.5s ease-out',
+    display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+    opacity: 0.95,
+  });
+  $msgBoxes.prepend($msgBox);
+  setTimeout(() => { $msgBox.css({ transform: 'translateX(-10px)' }); }, 50);
+  setTimeout(() => {
+    $msgBox.css({ transform: 'translateX(110%)' });
+    setTimeout(() => { $msgBox.remove(); }, 500);
+  }, duration);
+}
+
+function findDomElementForSeries(komgaSeriesId) {
+    let $dom = $(`div.v-card[komgaseriesid="${komgaSeriesId}"]`);
+    if ($dom.length > 0) return $dom.first();
+    $dom = $(`div.my-2.mx-2[komgaseriesid="${komgaSeriesId}"]`);
+    if ($dom.length > 0) return $dom.first();
+    return null;
+}
+
+function loadSearchBtn($dom, komgaSeriesId) {
+    $dom.attr('komgaSeriesId', komgaSeriesId);
+    const width = $dom.width();
+    const btnDia = Math.max(width / 5.5, 34);
+    let $syncInfo = $('<button title="仅更新元数据"></button>').attr('komgaSeriesId', komgaSeriesId);
+    let $syncAll = $('<button title="更新元数据和封面"></button>').attr('komgaSeriesId', komgaSeriesId);
+    const currentBtnStyle = { ...btnStyle, width: btnDia, height: btnDia };
+    $syncAll.css({ ...currentBtnStyle, right: '10px' });
+    $syncAll.append('<i aria-hidden="true" class="v-icon notranslate mdi mdi-image-sync-outline theme--light" style="font-size: inherit;"></i>');
+    $syncInfo.css({ ...currentBtnStyle, right: btnDia + 15 + 'px' });
+    $syncInfo.append('<i aria-hidden="true" class="v-icon notranslate mdi mdi-file-document-edit-outline theme--light" style="font-size: inherit;"></i>');
+    $syncAll.add($syncInfo).on('mouseenter', function () {
+        $(this).css({ 'background-color': 'yellow', color: '#3c3c3c' });
+    }).on('mouseleave', function () {
+        $(this).css({ 'background-color': 'orange', color: '#efefef' });
+    });
+    $syncInfo.on('click', async (e) => {
+        e.stopPropagation();
+        await handleSearchClick(komgaSeriesId, 'meta', $dom);
+    });
+    $syncAll.on('click', async (e) => {
+        e.stopPropagation();
+        await handleSearchClick(komgaSeriesId, 'all', $dom);
+    });
+    $dom.append($syncAll).append($syncInfo);
+    $dom.on('mouseenter', function () {
+        $syncAll.add($syncInfo).css({ opacity: '1', 'pointer-events': 'auto' });
+    }).on('mouseleave', function () {
+        $syncAll.add($syncInfo).css({ opacity: '0', 'pointer-events': 'none' });
+    });
+}
+
+function showBookSelectionPanel(seriesListRes) {
+    return new Promise((resolve) => {
+        const $selBookPanel = $('<div></div>').css({ ...selPanelStyle }); // selPanelStyle 需要在全局定义
+        seriesListRes.forEach((series) => {
+            const $selBookBtn = $('<button></button>')
+                .attr('resSeriesId', series.id)
+                .css({ ...selPanelBtnStyle }); // selPanelBtnStyle 需要在全局定义
+            // 内部容器，用于更好的内容布局和padding
+            const $contentWrapper = $('<div></div>').css({
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center', // 垂直居中内容
+                alignItems: 'center',    // 水平居中内容
+                height: '100%',          // 撑满按钮高度
+                padding: '5px',          // 按钮内边距
+                boxSizing: 'border-box',
+                position: 'relative',    // 为内部元素的z-index服务
+                zIndex: 2                // 确保内容在背景图遮罩之上
+            });
+            // 1. 显示主标题 (通常是 series.name_cn)
+            $contentWrapper.append(
+                $('<div></div>').css({
+                    fontWeight: 'bold',
+                    fontSize: '14px', // 可以根据按钮大小调整
+                    marginBottom: '5px',
+                    wordBreak: 'break-word', // 防止长标题溢出
+                    maxHeight: '2.8em', // 限制标题高度，约两行
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    // lineHeight: '1.4em' // 可选，用于精确控制行高
+                }).text(series.title) // 使用 .text() 以避免HTML注入
+            );
+            // 2. 显示原始标题 (series.name / series.orititle)，如果与主标题不同且存在
+            if (series.orititle && series.orititle.trim() !== '' && series.orititle.toLowerCase() !== series.title.toLowerCase()) {
+                $contentWrapper.append(
+                    $('<div></div>').css({
+                        fontSize: '11px',
+                        color: '#e0e0e0', // 在深色背景/遮罩上应该可见
+                        marginBottom: '4px',
+                        fontStyle: 'italic',
+                        wordBreak: 'break-word',
+                        maxHeight: '1.3em', // 限制一行
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                    }).text(series.orititle)
+                );
+            }
+            // 3. 显示作者 (排除 "取消选择" 按钮)
+            if (series.id !== -1) { // series.id === -1 是取消按钮
+                const authorText = series.author?.trim() || '未知作者';
+                $contentWrapper.append(
+                    $('<div></div>').css({
+                        fontSize: '12px',
+                        color: '#f0f0f0', // 确保在背景图上可读
+                        marginBottom: '4px',
+                        wordBreak: 'break-word',
+                        maxHeight: '1.4em', // 限制一行
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                    }).text(authorText)
+                );
+            }
+            // 4. 显示别名 (排除 "取消选择" 按钮，且别名存在)
+            if (series.id !== -1 && series.aliases && series.aliases.trim() !== '') {
+                $contentWrapper.append(
+                    $('<div></div>').css({
+                        fontSize: '10px', // 别名用更小的字号
+                        color: '#cccccc', // 浅灰色
+                        marginTop: '2px',
+                        wordBreak: 'break-word',
+                        maxHeight: '2.4em', // 限制约两行的高度
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        lineHeight: '1.2em', // 调整行高以适应两行
+                        // whiteSpace: 'normal' // 确保能换行
+                    }).text(`别名: ${series.aliases}`)
+                );
+            } else if (series.id !== -1 && (!series.aliases || series.aliases.trim() === '')) {
+                // 如果不是取消按钮，但没有别名，可以添加一个占位符以帮助对齐，如果需要的话
+                // $contentWrapper.append($('<div></div>').css({ height: '1.2em', marginTop: '2px' }));
+            }
+            // 如果是 "取消选择" 按钮的特殊处理 (清空内容，只显示标题)
+            if (series.id === -1) {
+                $contentWrapper.empty(); // 清空之前可能添加的内容
+                $contentWrapper.append(
+                    $('<div></div>').css({
+                        fontWeight: 'bold',
+                        fontSize: '16px', // 取消按钮的文字可以大一些
+                        color: 'white'    // 确保在红色背景上白色文字清晰
+                    }).text(series.title) // "取消选择"
+                );
+                $selBookBtn.css({ // 取消按钮的特定样式
+                    backgroundColor: '#dc3545', // 红色背景
+                    color: 'white',
+                    backgroundImage: 'none', // 无背景图片
+                    textShadow: 'none',      // 无文字阴影
+                    minHeight: '60px',       // 保持一个最小高度
+                    height: 'auto'           // 高度自适应内容
+                });
+            }
+            $selBookBtn.append($contentWrapper);
+            // 背景图片和遮罩逻辑 (仅对非取消按钮)
+            if (series.cover && series.id !== -1) {
+                $selBookBtn.css({
+                    'background-image': `url(${series.cover})`,
+                    'background-size': 'cover',
+                    'background-position': 'center',
+                    'background-repeat': 'no-repeat',
+                    'text-shadow': '1px 1px 3px #000, -1px -1px 3px #000, 1px -1px 3px #000, -1px 1px 3px #000', // 增强文字对比度
+                    'color': 'white', // 确保文字默认为白色，在深色遮罩上可读
+                    'position': 'relative', // 为遮罩定位
+                    // 'border': '1px solid rgba(255,255,255,0.2)', // 可选的边框
+                });
+                // 添加遮罩层，确保它在背景图之上，内容在遮罩之上
+                const $overlay = $('<div></div>').css({
+                    position: 'absolute',
+                    top: 0, left: 0,
+                    width: '100%', height: '100%',
+                    backgroundColor: 'rgba(0, 0, 0, 0.65)', // 增加遮罩不透明度
+                    borderRadius: '10px', // 与按钮圆角一致
+                    zIndex: 1 // 遮罩在背景图之上
+                });
+                $selBookBtn.prepend($overlay); // Prepend 使其在 $contentWrapper 之下
+            }
+            $selBookBtn.on('click', function (e) {
+                e.stopPropagation();
+                const seriesIdRes = parseInt($(this).attr('resSeriesId'));
+                $selBookPanel.remove(); // 关闭面板
+                resolve(seriesIdRes);   // 返回选择的 ID
+            });
+            $selBookPanel.append($selBookBtn);
+        });
+        $selBookPanel.appendTo('body');
+    });
+}
+
+async function performSearchAndHandleResults(searchTerm, komgaSeriesId, $dom, searchType) {
+    if (!searchTerm || searchTerm.trim() === '') {
+        showMessage('搜索词不能为空', 'warning');
+        return Promise.reject('Empty search term');
+    }
+    showMessage('正在查找《' + searchTerm + '》', 'info', 2000);
+    try {
+        let seriesListRes = await fetchBookByName(searchTerm, searchType); // searchType is 'btv' or 'bof'
+        let seriesIdRes = 0;
+        if (seriesListRes.length > 0) {
+            if (seriesListRes.length > 8) seriesListRes = seriesListRes.slice(0, 8); // Limit to 8 results + Cancel
+            seriesListRes.push({ id: -1, title: '取消选择', author: '' }); // Add cancel option
+            seriesIdRes = await showBookSelectionPanel(seriesListRes);
+            if (seriesIdRes === -1) { // User cancelled
+                showMessage('检索《' + searchTerm + '》已取消', 'warning');
+                return Promise.reject('Selection cancelled');
+            } else if (seriesIdRes > 0) { // Valid selection
+                partLoadingStart($dom);
+                // seriesIdRes is the ID from the external source (BTV or BOF)
+                await fetchBookByUrl(komgaSeriesId, seriesIdRes, '', searchType); // searchType is 'btv' or 'bof'
+                return Promise.resolve();
+            } else {
+                return Promise.reject('Invalid selection ID');
+            }
+        } else {
+             showMessage('检索《' + searchTerm + '》未找到', 'error', 4000);
+             return Promise.reject('No results found');
+        }
+    } catch (error) {
+        console.error(`Error during search/fetch process for "${searchTerm}":`, error);
+        showMessage(`处理《${searchTerm}》时出错: ${error.message || error}`, 'error');
+        partLoadingEnd($dom); // Ensure loading ends on error
+        return Promise.reject(error);
+    }
+    // partLoadingEnd($dom); // This was here, but fetchBookByUrl handles its own partLoadingEnd now.
+}
+
+async function selectSeriesTitle(komgaSeriesId, $dom) {
+    return new Promise(async (resolve, reject) => {
+        const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId);
+        const oriTitle = await getKomgaOriTitle(komgaSeriesId); // series.name
+        const seriesName = (komgaMeta && komgaMeta.title && komgaMeta.title.trim()) || oriTitle;
+        if (!seriesName) {
+             showMessage(`无法获取系列 ${komgaSeriesId} 的标题`, 'error');
+             return reject('Failed to get original title');
+        }
+        // Simplified title extraction logic, assuming Komga title is often cleaner
+        let seriesNamesTemp = seriesName.replace(/^\[|\]$/g, ''); // Remove leading/trailing brackets
+        let seriesNames = seriesNamesTemp.split(/\[|\]/).filter(Boolean); // Split by brackets
+        let komgaSeriesTitles = seriesNames.length >= 2 ? [seriesNames[0], seriesNames[1]] : [seriesNames[0]];
+        // Further split first part if it contains author-like patterns (e.g., "Author [Title]")
+        let authorTitle = komgaSeriesTitles.shift().split('×'); // if '×' is used as separator
+        komgaSeriesTitles = [...authorTitle, ...komgaSeriesTitles];
+        komgaSeriesTitles = komgaSeriesTitles.map((t) =>
+            t2s(t.split(' ')[0].split('(')[0].split('（')[0].split('_')[0].split('~')[0].split('♂')[0].split('♀')[0].trim())
+        );
+        // Add the original seriesName (after basic cleaning) as the first option, as it's often the best
+        const minimalProcessedTitle = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').trim());
+        const selTitlesRaw = komgaSeriesTitles.map((t) => t.replace(/[:：!！]/g, '')).filter(Boolean);
+        if (minimalProcessedTitle && !selTitlesRaw.includes(minimalProcessedTitle)) {
+             selTitlesRaw.unshift(minimalProcessedTitle);
+        }
+        const selTitles = [...new Set(selTitlesRaw)].filter(Boolean); // Unique, non-empty titles
+        const $selTitlePanel = $('<div></div>').css({ ...selPanelStyle });
+        const searchType = localStorage.getItem(`STY-${komgaSeriesId}`); // 'btv' or 'bof'
+        if (selTitles.length > 0) {
+            selTitles.forEach((title) => {
+                let $selTitleBtn = $('<button></button>').text(title).css(selPanelBtnStyle);
+                $selTitleBtn.on('click', async function (e) {
+                    e.stopPropagation();
+                    $selTitlePanel.remove();
+                    try {
+                        await performSearchAndHandleResults(title, komgaSeriesId, $dom, searchType);
+                        resolve();
+                    } catch (searchError) {
+                        // Error message already shown by performSearchAndHandleResults
+                        reject(searchError);
+                    }
+                });
+                $selTitlePanel.append($selTitleBtn);
+            });
+        } else {
+             const $noAutoTitleMsg = $('<div style="grid-column: 1 / -1; text-align: center; padding: 10px; color: #555;">未能自动提取关键词，请手动输入。</div>');
+             $selTitlePanel.append($noAutoTitleMsg);
+        }
+        // Manual input section
+        const $manualInputContainer = $('<div></div>').css({
+            gridColumn: '1 / -1', // Span all columns
+            display: 'flex',
+            gap: '10px',
+            marginTop: '15px',
+            padding: '10px',
+            borderTop: '1px solid #ccc'
+        });
+        const $manualInput = $('<input type="text">').attr('id', 'manualSearchInput').css({
+            flexGrow: 1,
+            padding: '8px 10px',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            fontSize: '14px'
+        }).attr('placeholder', '或在此手动输入搜索词');
+        const $manualSearchBtn = $('<button>手动搜索</button>').css({
+             ...selPanelBtnStyle, // Reuse some styling
+             width: 'auto',       // Adjust width
+             height: 'auto',      // Adjust height
+             padding: '8px 15px',
+             backgroundColor: '#007bff', // A different color for manual search
+             flexShrink: 0        // Prevent button from shrinking too much
+        });
+        $manualSearchBtn.on('click', async function(e) {
+            e.stopPropagation();
+            const manualTerm = $('#manualSearchInput').val().trim();
+            if (!manualTerm) {
+                showMessage('请输入手动搜索词', 'warning');
+                return;
+            }
+            $selTitlePanel.remove();
+            try {
+                await performSearchAndHandleResults(manualTerm, komgaSeriesId, $dom, searchType);
+                resolve();
+            } catch (searchError) {
+                 // Error message already shown
+                 reject(searchError);
+            }
+        });
+        $manualInputContainer.append($manualInput).append($manualSearchBtn);
+        $selTitlePanel.append($manualInputContainer);
+         // Add a general cancel button
+         const $cancelBtn = $('<button>取消搜索</button>').css({
+             ...selPanelBtnStyle,
+             gridColumn: '1 / -1', // Span all columns
+             marginTop: '10px',
+             backgroundColor: '#dc3545', // Red for cancel
+             height: 'auto', // Auto height
+             minHeight: '50px',
+             padding: '10px'
+         });
+         $cancelBtn.on('click', function(e) {
+             e.stopPropagation();
+             $selTitlePanel.remove();
+             showMessage('搜索已取消', 'warning');
+             reject('Title selection cancelled'); // Reject the promise
+         });
+         $selTitlePanel.append($cancelBtn);
+        $selTitlePanel.appendTo('body');
+        setTimeout(() => $manualInput.focus(), 100); // Focus manual input
+    });
+}
+//</editor-fold>
+
+// ************************************** 事件处理 **************************************
+//<editor-fold desc="事件处理">
+async function handleSearchClick(komgaSeriesId, type, $dom) {
+  // type is 'meta' or 'all' (sync type for Komga)
+  localStorage.setItem(`SID-${komgaSeriesId}`, type); // Store Komga sync type
+  await search(komgaSeriesId, $dom);
+}
+//</editor-fold>
+
+// ************************************** 数据处理 **************************************
+//<editor-fold desc="数据处理">
+async function filterSeriesMeta(komgaSeriesId, seriesMeta) {
+    const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId);
+    if (!komgaMeta) {
+        // If no existing Komga meta, return the new meta as is
+        return seriesMeta;
+    }
+    // Links: Merge and keep unique by label (case-insensitive)
+    const existingLinks = komgaMeta.links || [];
+    const newLinks = seriesMeta.links || [];
+    const combinedLinks = [...existingLinks, ...newLinks];
+    seriesMeta.links = combinedLinks.filter(
+        (link, index, self) =>
+        link.label && self.findIndex((t) => t.label && t.label.toLowerCase() === link.label.toLowerCase()) === index
+    );
+    // Tags: Merge, convert s2t, normalize, and keep unique
+    let combinedTags = [...(komgaMeta.tags || []), ...(seriesMeta.tags || [])].map((t) => t2s(t)); // s2t on all tags
+    combinedTags = combinedTags.map((t) => {
+        const matchingLabel = equalLabels.find((labels) => labels.split(',').includes(t));
+        return matchingLabel ? matchingLabel.split(',')[0] : t; // Normalize
+    }).filter(Boolean); // Remove empty tags
+    seriesMeta.tags = Array.from(new Set(combinedTags)); // Unique
+    // Alternate Titles: Merge, sort (原名 first, 别名 last), and keep unique by title (case-insensitive)
+    let combinedAltTitles = [...(komgaMeta.alternateTitles || []), ...(seriesMeta.alternateTitles || [])];
+    combinedAltTitles.sort((a, b) => { // Custom sort: "原名" first, "别名" tends to be less specific
+        if (a.label === '原名') return -1;
+        if (b.label === '原名') return 1;
+        if (a.label === '别名') return 1; // Put "别名" after more specific ones if not "原名"
+        if (b.label === '别名') return -1;
+        return 0;
+    });
+    seriesMeta.alternateTitles = combinedAltTitles.filter(
+        (altTitle, index, self) =>
+        altTitle.title && self.findIndex((t) => t.title && t.title.toLowerCase() === altTitle.title.toLowerCase()) === index
+    );
+    // Respect Komga's lock fields
+    for (const keyName in seriesMeta) {
+        if (komgaMeta[keyName + 'Lock'] === true) {
+             // console.log(`KomgaPatcher: Field "${keyName}" is locked for series ${komgaSeriesId}. Skipping update.`);
+             delete seriesMeta[keyName]; // Remove from payload if locked
+             delete seriesMeta[keyName + 'Lock']; // Also remove the lock field itself from payload if it was carried over
+        }
+    }
+    return seriesMeta;
+}
+//</editor-fold>
+
+// ************************************** API封装 **************************************
+//<editor-fold desc="基本请求封装">
+function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = 'text') {
+    return new Promise((resolve, reject) => {
+        let requestHeaders = { ...headers }; // 从传入的 headers 开始
+        let requestData = data_ry;
+
+        if (data_ry instanceof FormData) {
+            // 对于 FormData, Content-Type 由浏览器设置
+        } else if (send_type !== "GET" && typeof data_ry === 'object') {
+            requestData = JSON.stringify(data_ry);
+            requestHeaders = { ...defaultReqHeaders, ...requestHeaders }; // 与默认值合并，传入的 headers 优先
+        } else if (send_type === "GET") {
+            requestData = undefined;
+            // 对于 GET, 通常不需要 Content-Type
+            delete requestHeaders['content-type']; // 确保 GET 请求没有默认的 content-type
+        }
+
+        // 如果适用，添加 Bangumi 特定请求头和 Authorization 令牌
+        if (url.startsWith(btvApiUrl)) {
+             requestHeaders = { ...bangumiApiHeaders, ...requestHeaders }; // Bangumi 基础请求头优先，然后是特定调用的请求头
+
+             const accessToken = getBangumiAccessToken();
+             if (accessToken) {
+                 requestHeaders['Authorization'] = `Bearer ${accessToken}`;
+                 // console.log("正在为请求使用Bangumi Access Token:", url.substring(0,60));
+             } else {
+                 // console.log("未找到用于请求的Bangumi Access Token:", url.substring(0,60));
+             }
+        }
+
+        let requestUrl = url;
+        // 为 GET 请求添加缓存清除参数，除非是不喜欢它的API (例如外部API)
+        if (send_type === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl)) {
+            requestUrl += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+        }
+
+        GM_xmlhttpRequest({
+            method: send_type,
+            url: requestUrl,
+            headers: requestHeaders,
+            data: requestData,
+            responseType: responseType,
+            timeout: 30000, // 30 秒超时
+            onload: (response) => {
+                if (response.status >= 200 && response.status < 300) {
+                    resolve(responseType === 'text' || responseType === 'json' ? response.responseText : response.response);
+                } else if (response.status === 401 && url.startsWith(btvApiUrl)) { // Bangumi API 认证失败
+                    console.error(`[asyncReq] Bangumi API 授权错误 (401): ${send_type} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
+                    // 检查是否存在已配置的 Access Token
+                    const currentToken = getBangumiAccessToken();
+                    if (currentToken) {
+                        showMessage(
+                            `Bangumi API认证失败(401)。您配置的Access Token可能已失效或不正确。请通过油猴脚本菜单更新Token。`,
+                            'error',
+                            15000 // 显示更长时间
+                        );
+                    } else {
+                        showMessage(
+                            `Bangumi API认证失败(401)。如果您想使用Access Token，请通过油猴脚本菜单进行配置。`,
+                            'error',
+                            10000
+                        );
+                    }
+                    reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unauthorized'}. Bangumi Access Token might be invalid or expired.`));
+                }
+                else {
+                    console.error(`[asyncReq] HTTP Error (${response.status}): ${send_type} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
+                    showMessage(`请求错误 (${response.status}): ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                    reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unknown error'}`));
+                }
+            },
+            onerror: (error) => {
+                console.error(`[asyncReq] Network Error: ${send_type} ${requestUrl.substring(0,100)}...`, error);
+                showMessage(`网络请求失败: ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                reject(new Error('Network request failed'));
+            },
+            ontimeout: () => {
+                console.error(`[asyncReq] Timeout: ${send_type} ${requestUrl.substring(0,100)}...`);
+                showMessage(`请求超时: ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                reject(new Error('Request timed out'));
+            }
+        });
+    });
+}
+//</editor-fold>
+
+//<editor-fold desc="API封装-系列">
+async function getKomgaSeriesData(komgaSeriesId) {
+    const seriesUrl = `${location.origin}/api/v1/series/${komgaSeriesId}`;
+    try {
+        const seriesResStr = await asyncReq(seriesUrl, 'GET');
+        return JSON.parse(seriesResStr);
+    } catch (error) {
+        console.error(`[getKomgaSeriesData] Failed for ID ${komgaSeriesId}:`, error);
+        showMessage(`获取系列 ${komgaSeriesId} 数据失败`, 'error');
+        return null;
+    }
+}
+
+async function getKomgaSeriesMeta(komgaSeriesId) {
+    const seriesData = await getKomgaSeriesData(komgaSeriesId);
+    return seriesData ? seriesData.metadata : null;
+}
+
+async function getKomgaOriTitle(komgaSeriesId) { // This gets series.name (folder name)
+    const seriesData = await getKomgaSeriesData(komgaSeriesId);
+    return seriesData ? seriesData.name : null;
+}
+
+async function updateKomgaSeriesMeta(komgaSeriesId, komgaSeriesName, komgaSeriesMeta) {
+    const bookMetaUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/metadata`;
+    // Filter out null or empty string values before sending, but allow empty arrays (for tags, links etc.)
+    const cleanMeta = Object.fromEntries(
+        Object.entries(komgaSeriesMeta).filter(([_, v]) => v !== null && v !== '' || (Array.isArray(v)))
+    );
+    if (Object.keys(cleanMeta).length === 0) {
+        // console.log(`[updateKomgaSeriesMeta] No metadata to update for ${komgaSeriesName}.`);
+        return;
+    }
+    try {
+        await asyncReq(bookMetaUrl, 'PATCH', cleanMeta); // Komga API handles empty arrays correctly (e.g. clearing tags)
+        showMessage(`《${komgaSeriesName}》系列信息已更新`, 'success', 1500);
+    } catch (e) {
+        console.error(`[updateKomgaSeriesMeta] Failed for ${komgaSeriesName}:`, e);
+        showMessage(`《${komgaSeriesName}》系列信息更新失败`, 'error', 5000);
+    }
+}
+
+async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedImageUrls) {
+    if (!orderedImageUrls || orderedImageUrls.length === 0) {
+        showMessage(`《${komgaSeriesName}》系列封面URL列表为空，跳过更新`, 'warning');
+        return false;
+    }
+    await cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName);
+    let blob; // Declare blob outside the loop to have it in scope for 413 error reporting
+    for (let i = 0; i < orderedImageUrls.length; i++) {
+        const imgUrl = orderedImageUrls[i];
+        const imageSizeLabel = i === 0 ? "首选" : (i === 1 ? "中尺寸" : (i === 2 ? "通用尺寸" : "小尺寸"));
+        try {
+            showMessage(`《${komgaSeriesName}》尝试上传 ${imageSizeLabel} 系列封面...`, 'info', 2000);
+            blob = await asyncReq(imgUrl, 'GET', undefined, {}, 'blob');
+            if (!blob || blob.size === 0) {
+                console.warn(`[updateKomgaSeriesCover] 下载图片 ${imgUrl} 失败或为空 blob。`);
+                throw new Error("下载图片 blob 失败或为空");
+            }
+            // console.log(`《${komgaSeriesName}》系列封面 ${imgUrl} (尺寸: ${imageSizeLabel}) 下载成功，大小: ${blob.size} bytes`);
+            let updateSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
+            const seriesCoverFormdata = new FormData();
+            const fileName = `series_cover_${komgaSeriesId}.jpg`;
+            const seriesCoverFile = new File([blob], fileName, { type: blob.type || 'image/jpeg' });
+            seriesCoverFormdata.append('file', seriesCoverFile);
+            seriesCoverFormdata.append('selected', 'true');
+            await asyncReq(updateSeriesCoverUrl, 'POST', seriesCoverFormdata);
+            showMessage(`《${komgaSeriesName}》系列封面 (${imageSizeLabel}) 已更新`, 'success', 2500);
+            return true;
+        } catch (e) {
+            const errorMessage = e.message || String(e);
+            if (errorMessage.includes("HTTP Error 413")) {
+                console.warn(`[updateKomgaSeriesCover] 《${komgaSeriesName}》上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败 (413 Payload Too Large). 大小: ${blob ? blob.size + ' bytes' : '未知'}. 尝试下一个尺寸...`);
+                showMessage(`《${komgaSeriesName}》${imageSizeLabel} 封面过大(413)，尝试更小尺寸...`, 'warning', 3000);
+                if (i === orderedImageUrls.length - 1) {
+                    showMessage(`《${komgaSeriesName}》所有尺寸系列封面均因过大(413)上传失败。请检查服务器配置。`, 'error', 7000);
+                }
+            } else {
+                console.error(`[updateKomgaSeriesCover] 《${komgaSeriesName}》上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败:`, e);
+                showMessage(`《${komgaSeriesName}》系列封面 (${imageSizeLabel}) 更新失败: ${errorMessage}`, 'error', 5000);
+                return false;
+            }
+        }
+    }
+    console.error(`[updateKomgaSeriesCover] 《${komgaSeriesName}》所有尝试均未能成功上传系列封面。`);
+    return false;
+}
+
+async function getKomgaSeriesCovers(komgaSeriesId) {
+    let allSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
+    try {
+        const coversStr = await asyncReq(allSeriesCoverUrl, 'GET');
+        return JSON.parse(coversStr);
+    } catch (e) {
+        console.error(`[getKomgaSeriesCovers] Failed for ID ${komgaSeriesId}:`, e);
+        return []; // Return empty array on error
+    }
+}
+
+async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
+    const thumbs = await getKomgaSeriesCovers(komgaSeriesId);
+    // Filter for thumbnails that are USER_UPLOADED and NOT currently selected
+    const thumbsToClean = thumbs?.filter((thumb) => thumb.type === 'USER_UPLOADED' && thumb.selected === false) || [];
+    if (thumbsToClean.length === 0) return;
+    const cleanSeriesCoverUrlBase = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails/`;
+    for (const thumb of thumbsToClean) {
+        try {
+            await asyncReq(cleanSeriesCoverUrlBase + thumb.id, 'DELETE');
+            // showMessage(`《${komgaSeriesName}》旧封面 (ID: ${thumb.id}) 已清理`, 'info', 1000);
+        } catch (e) {
+            console.error(`[cleanKomgaSeriesCover] Failed to delete thumb ${thumb.id} for ${komgaSeriesName}:`, e);
+            showMessage(`《${komgaSeriesName}》系列封面清理失败 (ID: ${thumb.id})`, 'error', 5000);
+        }
+    }
+}
+//</editor-fold>
+
+//<editor-fold desc="API封装-话卷">
+async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay, orderedImageUrls) {
+    if (!orderedImageUrls || orderedImageUrls.length === 0) {
+        // showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面URL列表为空，跳过`, 'warning', 1000);
+        return false;
+    }
+    let blob; // Declare blob outside the loop
+    for (let i = 0; i < orderedImageUrls.length; i++) {
+        const imgUrl = orderedImageUrls[i];
+        const imageSizeLabel = i === 0 ? "首选" : (i === 1 ? "中等" : (i === 2 ? "通用" : "较小"));
+        try {
+            showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 尝试上传 ${imageSizeLabel} 封面...`, 'info', 1500);
+            blob = await asyncReq(imgUrl, 'GET', undefined, {}, 'blob');
+            if (!blob) throw new Error("下载图片 blob 失败");
+            let updateBookCoverUrl = `${location.origin}/api/v1/books/${book.id}/thumbnails`;
+            let bookCoverFormdata = new FormData();
+            let bookCoverName = `vol_${bookNumberForDisplay}_cover.jpg`;
+            let bookCoverFile = new File([blob], bookCoverName, { type: blob.type || 'image/jpeg' });
+            bookCoverFormdata.append('file', bookCoverFile);
+            bookCoverFormdata.append('selected', 'true');
+            await asyncReq(updateBookCoverUrl, 'POST', bookCoverFormdata);
+            showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面 (${imageSizeLabel}版本) 已更新`, 'success', 1500);
+            return true; // 上传成功
+        } catch (e) {
+            const errorMessage = e.message || String(e);
+            if (errorMessage.includes("HTTP Error 413")) {
+                console.warn(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败 (413). 大小: ${blob ? blob.size + ' bytes' : '未知'}. 尝试下一个...`);
+                showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面过大(413)，尝试更小...`, 'warning', 2500);
+                 if (i === orderedImageUrls.length - 1) {
+                    showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有尺寸封面均因过大(413)上传失败。`, 'error', 6000);
+                }
+            } else {
+                console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败:`, e);
+                showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面 (${imageSizeLabel}版本) 更新失败: ${errorMessage}`, 'error', 5000);
+                return false; // 其他错误，停止尝试此书的封面
+            }
+        }
+    }
+    console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有尝试均未能成功上传封面。`);
+    return false; // 未成功
+}
+
+async function getKomgaSeriesBooks(komgaSeriesId) {
+    let seriesBookUrl =
+        `${location.origin}/api/v1/series/${komgaSeriesId}` +
+        `/books?page=0&size=${maxReqBooks}&sort=metadata.numberSort%2Casc`; // Fetch all books up to maxReqBooks
+    try {
+        const seriesBookRes = await asyncReq(seriesBookUrl, 'GET');
+        return JSON.parse(seriesBookRes);
+    } catch (e) {
+        console.error(`[getKomgaSeriesBooks] Failed for ID ${komgaSeriesId}:`, e);
+        showMessage(`获取系列 ${komgaSeriesId} 书籍列表失败`, 'error');
+        return { content: [], numberOfElements: 0 }; // Return empty structure on error
+    }
+}
+
+async function updateKomgaBookMeta(book, komgaSeriesName, bookMeta) {
+    // Filter out null or empty string values before sending
+    const cleanMeta = Object.fromEntries(Object.entries(bookMeta).filter(([_, v]) => v !== null && v !== ''));
+    if (Object.keys(cleanMeta).length === 0) {
+        return; // No actual metadata to update
+    }
+    try {
+        await asyncReq(`${location.origin}/api/v1/books/${book.id}/metadata`, 'PATCH', cleanMeta);
+        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息已更新`, 'success', 1000);
+    } catch (e) {
+        console.error(`[updateKomgaBookMeta] Failed for ${komgaSeriesName} Vol ${book.number}:`, e);
+        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息更新失败`, 'error', 5000);
+    }
+}
+
+async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolumeCoverSets) {
+    // bookVolumeCoverSets 现在是这样的结构: [{ coverUrls: [urlL, urlM, urlC] }, { coverUrls: [...] }, ...]
+    // 或者是一个空数组 [] (如果没有封面信息或仅更新作者)
+    if (!seriesBooks || seriesBooks.numberOfElements === 0) return;
+    if (seriesBooks.numberOfElements >= maxReqBooks) {
+        showMessage(`系列《${seriesName}》的书籍数量 (${seriesBooks.numberOfElements}) 达到或超过 ${maxReqBooks} 的限制，跳过书籍处理。`, 'warning', 6000);
+        return;
+    }
+    const booksToProcess = seriesBooks.content || [];
+    let bookUpdateNeeded = bookAuthors?.length > 0;
+    // 检查 bookVolumeCoverSets 是否有内容，并且其元素有有效的 coverUrls
+    let coverUpdateNeeded = bookVolumeCoverSets && bookVolumeCoverSets.length > 0 &&
+                            bookVolumeCoverSets.some(set => set && set.coverUrls && set.coverUrls.length > 0);
+
+    if (!bookUpdateNeeded && !coverUpdateNeeded) return;
+
+    for (let i = 0; i < booksToProcess.length; i++) {
+        const book = booksToProcess[i];
+        const bookNumberForDisplay = (book.metadata?.numberSort ?? book.metadata?.number ?? (i + 1)).toString().padStart(2, '0'); // Prefer numberSort
+        try {
+            if (bookUpdateNeeded) {
+                let bookMeta = {
+                    title: `卷 ${bookNumberForDisplay}`, // Use the same number for display
+                    authors: bookAuthors,
+                };
+                await updateKomgaBookMeta(book, seriesName, bookMeta);
+            }
+            if (coverUpdateNeeded && bookVolumeCoverSets.length > i && bookVolumeCoverSets[i] && bookVolumeCoverSets[i].coverUrls && bookVolumeCoverSets[i].coverUrls.length > 0) {
+                 const orderedImageUrlsForBook = bookVolumeCoverSets[i].coverUrls;
+                 await updateKomgaBookCover(book, seriesName, bookNumberForDisplay, orderedImageUrlsForBook);
+            }
+        } catch (bookError) {
+            console.error(`[updateKomgaBookAll] Error processing book ${book.id} (Vol ${bookNumberForDisplay}) for series "${seriesName}":`, bookError);
+            // Message already shown by individual update functions
+        }
+    }
+}
+
+function ifUpdateBookAuthors(seriesBooks, bookAuthors) {
+    // This function decides if book authors should be updated.
+    // It's a heuristic based on the format of the last book's title.
+    if (!bookAuthors || bookAuthors.length === 0) return false; // No authors to update with
+    if (!seriesBooks || !seriesBooks.content || seriesBooks.content.length === 0) return false; // No books in Komga
+    const seriesBooksContent = seriesBooks.content;
+    const lastBook = seriesBooksContent[seriesBooksContent.length - 1]; // Check the last book
+    const lastBookMeta = lastBook.metadata;
+    if (!lastBookMeta || !lastBookMeta.title) return true; // If last book has no metadata or title, update
+    const lastBookTitle = lastBookMeta.title;
+    // If title is very long, or contains typical filename patterns, it's likely not manually set
+    if (lastBookTitle.length > 16) return true; // Arbitrary length, adjust if needed
+    if (lastBookTitle.includes('[') || lastBookTitle.includes(']')) return true;
+    if (lastBookTitle.toLowerCase().includes('.zip') || lastBookTitle.toLowerCase().includes('.cbz')) return true;
+    // If title looks like "Vol XX" or "卷 XX", it might be okay, but we still might want to ensure authors are set.
+    // If it does NOT look like a standard volume title, it's probably a filename, so update.
+    if (!/^vol(ume)?\s*\d+/i.test(lastBookTitle) && !/^卷\s*\d+/i.test(lastBookTitle)) return true;
+    // If Komga authors for the last book are empty, update
+    const lastBookKomgaAuthors = lastBookMeta.authors || [];
+    if (lastBookKomgaAuthors.length === 0) return true;
+    // TODO: Could add a check to see if Komga authors match the new authors.
+    // For now, if authors exist, and title isn't a clear filename, assume it might be okay.
+    // The current logic is more aggressive towards updating if the title isn't "卷 XX" or "Vol XX"
+    // or if authors are missing.
+    return false; // Default to not updating if none of the above "bad title" conditions are met and authors exist
+}
+//</editor-fold>
+
+//<editor-fold desc="API封装-收藏夹">
+const MANUAL_MATCH_COLLECTION_NAME = "手动匹配";
+let _manualMatchCollectionId = null;
+let _manualMatchCollectionExistingSeriesIds = []; // Cache existing series IDs in the collection
+
+async function ensureManualMatchCollectionExists(initialSeriesIdForCreation = null) {
+    if (_manualMatchCollectionId) return true; // Already found/created
+    const collectionsUrl = `${location.origin}/api/v1/collections?unpaged=true`; // Get all collections
+    try {
+        const collectionsPageStr = await asyncReq(collectionsUrl, 'GET');
+        const collectionsPage = JSON.parse(collectionsPageStr);
+        const collection = (collectionsPage.content || []).find(c => c.name === MANUAL_MATCH_COLLECTION_NAME);
+        if (collection) {
+            _manualMatchCollectionId = collection.id;
+            _manualMatchCollectionExistingSeriesIds = collection.seriesIds || [];
+            showMessage(`[收藏夹] 已找到 "${MANUAL_MATCH_COLLECTION_NAME}" (ID:${_manualMatchCollectionId})。包含 ${_manualMatchCollectionExistingSeriesIds.length} 个系列。`, 'info', 3000);
+            return true;
+        } else {
+            // Collection does not exist, attempt to create it
+            if (!initialSeriesIdForCreation) {
+                // If no series ID is provided to seed the collection, we can't create it with an empty series list (Komga might not allow)
+                // Or, we decide to create it empty if allowed. For now, let's require an ID.
+                console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，且未提供初始系列ID，将等待实际失败系列出现时创建。`);
+                return false; // Indicate not ready, but not a hard error.
+            }
+            const createUrl = `${location.origin}/api/v1/collections`;
+            // Komga API to create a collection requires a name and seriesIds (can be empty or with the first failed ID)
+            // Let's try creating it with the first series ID that needs it.
+            let payload = {
+                name: MANUAL_MATCH_COLLECTION_NAME,
+                ordered: false, // Typically false for such a collection
+                seriesIds: [initialSeriesIdForCreation] // Seed with the first ID
+            };
+            console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，使用系列ID "${initialSeriesIdForCreation}" 创建, payload:`, JSON.stringify(payload));
+            const createdCollectionStr = await asyncReq(createUrl, 'POST', payload);
+            const created = JSON.parse(createdCollectionStr);
+            _manualMatchCollectionId = created.id;
+            _manualMatchCollectionExistingSeriesIds = created.seriesIds || [initialSeriesIdForCreation]; // Should contain the initial ID
+            showMessage(`[收藏夹] 已使用系列ID ${initialSeriesIdForCreation} 创建 "${MANUAL_MATCH_COLLECTION_NAME}" (ID:${_manualMatchCollectionId})`, 'success', 3500);
+            return true;
+        }
+    } catch (error) {
+        console.error(`[ensureManualMatchCollectionExists] 操作 "${MANUAL_MATCH_COLLECTION_NAME}" 失败:`, error);
+        showMessage(`操作 "${MANUAL_MATCH_COLLECTION_NAME}" 收藏夹失败: ${error.message || error}`, 'error', 7000);
+        _manualMatchCollectionId = null; // Reset on error
+        _manualMatchCollectionExistingSeriesIds = [];
+        return false; // Creation or find failed
+    }
+}
+
+async function addSeriesToManualMatchCollectionImmediately(seriesIdToAdd, seriesNameToAdd) {
+    if (!seriesIdToAdd) return false;
+    let collectionReady = _manualMatchCollectionId ? true : false;
+    if (!collectionReady) {
+        // Collection ID unknown, try to ensure/create it, using the current seriesId as a seed if creating
+        collectionReady = await ensureManualMatchCollectionExists(seriesIdToAdd);
+    }
+    if (!collectionReady || !_manualMatchCollectionId) {
+        // If still not ready (e.g., creation failed or was skipped due to no initial ID before)
+        showMessage(`[收藏夹] 因 "${MANUAL_MATCH_COLLECTION_NAME}" 未就绪/创建失败，无法添加《${seriesNameToAdd || seriesIdToAdd}》。`, 'error', 4000);
+        return false;
+    }
+    // At this point, _manualMatchCollectionId and _manualMatchCollectionExistingSeriesIds should be populated
+    if (_manualMatchCollectionExistingSeriesIds.includes(seriesIdToAdd)) {
+        // console.log(`《${seriesNameToAdd || seriesIdToAdd}》已存在于 "${MANUAL_MATCH_COLLECTION_NAME}" 收藏夹中。`);
+        return true; // Already exists, no action needed
+    }
+    // Series not in collection, add it
+    const newSeriesList = [..._manualMatchCollectionExistingSeriesIds, seriesIdToAdd];
+    try {
+        // Komga API to update collection's series list: PATCH the collection with the new seriesIds array
+        await asyncReq(`${location.origin}/api/v1/collections/${_manualMatchCollectionId}`, 'PATCH', { seriesIds: newSeriesList });
+        _manualMatchCollectionExistingSeriesIds.push(seriesIdToAdd); // Update local cache
+        showMessage(`《${seriesNameToAdd || seriesIdToAdd}》已添加至 "${MANUAL_MATCH_COLLECTION_NAME}"。`, 'success', 3000);
+        return true;
+    } catch (error) {
+        console.error(`[addSeriesToCollImm] 添加系列 ${seriesIdToAdd} ("${seriesNameToAdd}") 到收藏夹 ${_manualMatchCollectionId} 失败:`, error);
+        showMessage(`添加《${seriesNameToAdd || seriesIdToAdd}》至 "${MANUAL_MATCH_COLLECTION_NAME}" 失败: ${error.message || error}`, 'error', 5000);
+        return false;
+    }
+}
+//</editor-fold>
+
+// ************************************* 第三方请求 (Bangumi API and bookof.moe) *************************************
+//<editor-fold desc="第三方请求">
+async function fetchBookByName(seriesName, source) {
+  source = source ? source.toLowerCase() : 'btv'; // Default to btv (Bangumi API)
+  try {
+      switch (source) {
+        case 'btv': return await fetchBtvSubjectByNameAPI(seriesName);
+        case 'bof': return await fetchMoeBookByName(seriesName); // Stays as is (scraping)
+        default:    return await fetchBtvSubjectByNameAPI(seriesName);
+      }
+  } catch (error) {
+      console.error(`[fetchBookByName] Error searching "${seriesName}" on ${source}:`, error);
+      showMessage(`在 ${source.toUpperCase()} 搜索 《${seriesName}》 失败: ${error.message || error}`, 'error');
+      return []; // Return empty array on error
+  }
+}
+
+async function fetchBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '', source = 'btv') {
+    // reqSeriesId is the ID from BTV or BOF
+    // reqSeriesUrl is if a direct URL was already known (e.g. from Komga links)
+    source = source ? source.toLowerCase() : 'btv';
+    const $dom = findDomElementForSeries(komgaSeriesId) || $('body'); // Fallback to body for loading indicator if DOM not found
+
+    try {
+        switch (source) {
+            case 'btv':
+                await fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl);
+                break;
+            case 'bof':
+                await fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl); // Stays as is (scraping)
+                break;
+            default:
+                await fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl);
+                break;
+        }
+    } catch (error) {
+         console.error(`[fetchBookByUrl] Overall error fetching/processing for KomgaID ${komgaSeriesId} from ${source.toUpperCase()}:`, error);
+         showMessage(`处理系列 ${komgaSeriesId} (${source.toUpperCase()}) 时发生错误: ${error.message || error}`, 'error', 10000);
+    } finally {
+        partLoadingEnd($dom); // Ensure loading indicator is removed
+    }
+}
+
+// 辅助函数：尝试从 infobox 数组中提取特定 key 的值
+function parseInfobox(infoboxArray, targetKey) {
+    if (!infoboxArray || !Array.isArray(infoboxArray)) return null;
+    const item = infoboxArray.find(i => i.key === targetKey);
+    if (!item) return null;
+    if (typeof item.value === 'string') return item.value;
+    if (Array.isArray(item.value)) { // e.g., [{v: "value1"}, {v: "value2"}] or simple array of strings
+        return item.value.map(v => (typeof v === 'object' && v.v !== undefined) ? v.v : v).filter(v => typeof v === 'string').join('、');
+    }
+    if (typeof item.value === 'object' && item.value.v !== undefined) return item.value.v; // Single object like {v: "value"}
+    return null;
+}
+
+async function fetchBtvSubjectByNameAPI(seriesName) {
+    const searchUrl = `${btvApiUrl}/v0/search/subjects`;
+    const requestBody = {
+      keyword: seriesName,
+      sort: "match",
+      filter: {
+        type: [1], // 1 for Books (漫画, 画集, 轻小说)
+        nsfw: true // 搜索结果包含 nsfw 条目，需要设置 Bangumi API Access Token
+      }
+    };
+ 
+    try {
+      const searchResStr = await asyncReq(searchUrl, 'POST', requestBody, {});
+      const searchRes = JSON.parse(searchResStr);
+
+      if (!searchRes || !searchRes.data || searchRes.data.length === 0) {
+          console.log(`[fetchBtvSubjectByNameAPI] 搜索 "${seriesName}" (type: 书籍) 未找到任何结果。`);
+          return [];
+      }
+
+      // Filter specifically for "漫画" platform within the "书籍" type
+      const filteredData = searchRes.data.filter(item => item.platform === "漫画");
+
+      if (filteredData.length === 0) {
+          console.log(`[fetchBtvSubjectByNameAPI] 搜索 "${seriesName}" 未找到 platform 为 "漫画" 的条目。`);
+          return [];
+      }
+
+      const resArr = filteredData.map(item => {
+          let authorName = "未知作者";
+          let aliasesString = ""; // 用于存储处理后的别名字符串
+
+          if (item.infobox) {
+              // 提取作者 (优先作画，其次作者，再次原作)
+              const authorFromInfo = parseInfobox(item.infobox, "作画") ||
+                                     parseInfobox(item.infobox, "作者") ||
+                                     parseInfobox(item.infobox, "原作");
+              if (authorFromInfo) {
+                  authorName = authorFromInfo.split('、')[0].trim(); // 取第一个作为主要作者
+              }
+
+              // 提取并处理别名
+              const aliasBoxItem = item.infobox.find(info => info.key === "别名");
+              if (aliasBoxItem && Array.isArray(aliasBoxItem.value)) {
+                  const collectedAliases = [];
+                  aliasBoxItem.value.forEach(aliasObj => {
+                      if (aliasObj && typeof aliasObj.v === 'string' && aliasObj.v.trim() !== '') {
+                          collectedAliases.push(aliasObj.v.trim());
+                      }
+                  });
+                  if (collectedAliases.length > 0) {
+                      aliasesString = collectedAliases.join(' / '); // 用 " / " 分隔多个别名
+                  }
+              }
+          }
+
+          return {
+              id: item.id,
+              title: item.name_cn || item.name, // 优先中文名
+              orititle: item.name, // 原始名
+              author: authorName,
+              aliases: aliasesString, // 别名
+              cover: item.image || item.images?.medium || item.images?.common || item.images?.small || null, // 优先 image (通常是主封面)
+          };
+      });
+
+      return resArr.length > 8 ? resArr.slice(0, 8) : resArr; // Limit results if too many
+
+    } catch (error) {
+        // asyncReq already shows a message and logs the error
+        console.error(`[fetchBtvSubjectByNameAPI] POST 请求 "${seriesName}" 失败:`, error);
+        throw error; // Re-throw to be caught by caller
+    }
+}
+
+async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') {
+    const subjectId = reqSeriesId || (reqSeriesUrl.match(/subject\/(\d+)/) ? reqSeriesUrl.match(/subject\/(\d+)/)[1] : null);
+    if (!subjectId) {
+        throw new Error("Bangumi Subject ID is missing.");
+    }
+    const apiUrl = `${btvApiUrl}/v0/subjects/${subjectId}`;
+    const seriesResStr = await asyncReq(apiUrl, 'GET', undefined, {}); // API call
+    const btvData = JSON.parse(seriesResStr);
+
+    let seriesMeta = {
+        title: '', titleLock: false, titleSort: '', titleSortLock: false,
+        status: '', statusLock: false, tags: [], tagsLock: false,
+        links: [{ label: 'Btv', url: `${btvLegacyUrl}/subject/${subjectId}` }], linksLock: false,
+        publisher: '', publisherLock: false, totalBookCount: null, totalBookCountLock: false,
+        summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
+    };
+
+    seriesMeta.title = btvData.name_cn || btvData.name;
+    seriesMeta.titleSort = seriesMeta.title;
+    if (btvData.name && btvData.name !== seriesMeta.title) { // If original name differs from CN name
+        seriesMeta.alternateTitles.push({ label: '原名', title: capitalize(btvData.name) });
+    }
+    seriesMeta.summary = btvData.summary || '';
+    seriesMeta.totalBookCount = btvData.volumes || btvData.eps || btvData.total_episodes || null;
+
+    if (btvData.tags && btvData.tags.length > 0) {
+        const rawApiTags = btvData.tags.map(t => ({ name: t.name, count: t.count }));
+        const maxTagCount = Math.max(1, ...rawApiTags.map(tag => tag.count)); // Avoid -Infinity if no tags
+        let thresholdTagCount = 3; // Default threshold
+             if (maxTagCount > 200) thresholdTagCount = 35; else if (maxTagCount > 125) thresholdTagCount = 25;
+        else if (maxTagCount > 60)  thresholdTagCount = 15; else if (maxTagCount > 30)  thresholdTagCount = 10;
+        else if (maxTagCount > 10)  thresholdTagCount = 5;
+
+        seriesMeta.tags = rawApiTags
+            .filter(tag => tag.count >= thresholdTagCount && tagLabels.includes(tag.name + ',')) // Filter by count and predefined list
+            .map(tag => tag.name);
+    }
+
+    const infobox = btvData.infobox || [];
+    let resAuthors = [];
+    let seriesIndividualAliases = []; // For aliases from infobox
+
+    let publisherVal = parseInfobox(infobox, '出版社');
+    if (publisherVal) {
+        seriesMeta.publisher = t2s(publisherVal.split('、')[0].trim()); // Take first publisher, convert to simplified
+    }
+
+    // Define author roles mapping for Komga
+    const authorRoles = {
+        '作者': 'writer', '原作': 'writer', '漫画家': 'writer', '作画': 'penciller',
+        '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
+        '原案': 'story', '脚本': 'scriptwriter', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
+        // Add more roles as needed and map them to Komga's supported roles
+    };
+    for (const [key, role] of Object.entries(authorRoles)) {
+        let val = parseInfobox(infobox, key);
+        console.log(`[baseAsyncReq] Success (${val}...`);
+        if (val) {
+            val.split('、').forEach(name => { // Handle multiple authors for the same role
+                const trimmedName = name.trim();
+                if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
+                    resAuthors.push({ name: t2s(trimmedName), role: role });
+                }
+            });
+        }
+    }
+    seriesMeta.authors = resAuthors;
+
+    // Extract aliases from infobox (key: "别名")
+    const aliasItem = infobox.find(i => i.key === '别名');
+    if (aliasItem) {
+        if (Array.isArray(aliasItem.value)) { // e.g., [{v: "Alias1"}, {v: "Alias2"}]
+             seriesIndividualAliases.push(...aliasItem.value.map(v => (typeof v === 'object' ? v.v : v)?.trim()).filter(Boolean));
+        } else if (typeof aliasItem.value === 'string') { // e.g., "Alias1\nAlias2"
+             seriesIndividualAliases.push(...aliasItem.value.split('\n').map(a => a.trim()).filter(Boolean));
+        }
+    }
+    seriesIndividualAliases.forEach(alias => {
+        const aliasLower = alias.toLowerCase();
+        const titleLower = seriesMeta.title ? seriesMeta.title.toLowerCase() : '';
+        const oriNameLower = btvData.name ? btvData.name.toLowerCase() : '';
+        // Add if not empty, not same as title, not same as original name, and not already in alternateTitles
+        if (alias && aliasLower !== titleLower && aliasLower !== oriNameLower &&
+            !seriesMeta.alternateTitles.some(at => at.title.toLowerCase() === aliasLower)) {
+            seriesMeta.alternateTitles.push({ label: '别名', title: capitalize(alias) });
+        }
+    });
+
+    // Status from infobox (keys like "状态", "连载状态", "刊行状态")
+    let statusVal = parseInfobox(infobox, '状态') || parseInfobox(infobox, '连载状态') || parseInfobox(infobox, '刊行状态');
+    if (statusVal) {
+        statusVal = t2s(statusVal.toLowerCase()); // Convert to simplified Chinese and lower case for matching
+        if (statusVal.includes('休刊') || statusVal.includes('长期休载')) seriesMeta.status = 'HIATUS';
+        else if (statusVal.includes('连载中') || statusVal.includes('连载')) seriesMeta.status = 'ONGOING';
+        else if (statusVal.includes('完结') || statusVal.includes('已完结')) seriesMeta.status = 'ENDED';
+        // else if (statusVal.includes('宣布动画化')) seriesMeta.status = 'ONGOING'; // Or some other appropriate status
+    }
+
+    let finalMeta = await filterSeriesMeta(komgaSeriesId, seriesMeta);
+    // Filter out null or empty string values, but allow empty arrays (for tags, links etc.)
+    finalMeta = Object.fromEntries(Object.entries(finalMeta).filter(([_, v]) => v !== null && v !== '' || Array.isArray(v)));
+
+    const seriesNameForDisplay = finalMeta.title || btvData.name_cn || btvData.name || '未知系列';
+    await updateKomgaSeriesMeta(komgaSeriesId, seriesNameForDisplay, finalMeta);
+
+    // --- 获取系列和卷的多种封面尺寸 ---
+    const seriesCoverUrls = [];
+    if (btvData.images) { // 主条目的图片
+        if (btvData.images.large) seriesCoverUrls.push(btvData.images.large);
+        if (btvData.images.medium) seriesCoverUrls.push(btvData.images.medium);
+        if (btvData.images.common) seriesCoverUrls.push(btvData.images.common);
+        // if (btvData.images.small) seriesCoverUrls.push(btvData.images.small); // Usually too small
+    }
+    if (btvData.image && !seriesCoverUrls.includes(btvData.image)) { // `image` field is often the primary cover.
+        seriesCoverUrls.unshift(btvData.image); // Add to front as highest priority if different
+    }
+    const uniqueSeriesCoverUrls = [...new Set(seriesCoverUrls.filter(Boolean))]; // 去重和去空
+
+    const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
+    const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
+    const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBookAuthors(seriesBooks, finalMeta.authors);
+
+    if (fetchSeriesType === 'all') {
+        if (uniqueSeriesCoverUrls.length > 0) {
+            await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, uniqueSeriesCoverUrls);
+        } else {
+            showMessage(`《${seriesNameForDisplay}》未能获取系列主封面 (BGM API)`, 'warning');
+        }
+
+        // Fetch volume covers from related subjects (type: "单行本" or titles like "Vol. X")
+        let bookVolumeCoverSets = []; // [{ coverUrls: [urlL, urlM, ...] }, ...]
+        try {
+            const relatedSubjectsApiUrl = `${btvApiUrl}/v0/subjects/${subjectId}/subjects`;
+            const relatedSubjectsStr = await asyncReq(relatedSubjectsApiUrl, 'GET', undefined, {});
+            const relatedSubjects = JSON.parse(relatedSubjectsStr);
+
+            const volumes = relatedSubjects
+                .filter(rel =>
+                    rel.relation === "单行本" || // Explicit relation
+                    (rel.name && /^(?:(?:vol|巻|卷|册|第)\.?\s*\d+|通常版|限定版|特装版)/i.test(rel.name)) || // Title matching volume patterns
+                    (rel.name_cn && /^(?:(?:vol|巻|卷|册|第)\.?\s*\d+|通常版|限定版|特装版)/i.test(rel.name_cn)) // CN Title matching
+                )
+                .sort((a, b) => { // Sort by volume number if possible, then by ID
+                    const numA_match = (a.name_cn || a.name).match(/(\d+)/); // Try to extract number from name/name_cn
+                    const numB_match = (b.name_cn || b.name).match(/(\d+)/);
+                    const numA = numA_match ? parseInt(numA_match[1], 10) : null;
+                    const numB = numB_match ? parseInt(numB_match[1], 10) : null;
+
+                    if (numA !== null && numB !== null && numA !== numB) return numA - numB;
+                    // If numbers are same or not parsable, sort by Bangumi ID as a fallback
+                    return a.id - b.id;
+                });
+
+            for (const vol of volumes) {
+                const volCoverUrlsList = [];
+                if (vol.images) { // Standard image object with sizes
+                    if (vol.images.large) volCoverUrlsList.push(vol.images.large);
+                    if (vol.images.medium) volCoverUrlsList.push(vol.images.medium);
+                    if (vol.images.common) volCoverUrlsList.push(vol.images.common);
+                }
+                // Some related items might just have a top-level 'image' field (less common for subjects, more for EPs)
+                if (vol.image && !volCoverUrlsList.includes(vol.image)) {
+                     volCoverUrlsList.unshift(vol.image); // Put it at the beginning if it exists and is new
+                }
+                const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))]; // Remove duplicates and nulls
+                if (uniqueVolCoverUrls.length > 0) {
+                     bookVolumeCoverSets.push({ coverUrls: uniqueVolCoverUrls });
+                } else {
+                     // If this volume has no covers, push an empty set to maintain order for Komga books
+                     // updateKomgaBookCover will skip if urls are empty
+                     bookVolumeCoverSets.push({ coverUrls: [] });
+                }
+            }
+        } catch (e) {
+            console.error(`[BtvAPI] Error fetching/processing related subjects for volume covers (ID: ${subjectId}):`, e);
+            showMessage(`《${seriesNameForDisplay}》获取卷封面时出错 (BGM API)`, 'warning');
+        }
+
+        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bookVolumeCoverSets);
+    } else if (updateAuthorsFlag) { // 'meta' only sync, but authors need update
+        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, []); // Pass empty cover sets
+    }
+}
+
+async function fetchMoeBookByName(seriesName) {
+  // This function remains unchanged as it's for bookof.moe (scraping)
+  const moeSeriesName = s2t(seriesName); // Convert to traditional for BoF search
+  const searchUrl = `${bofUrl}/data_list.php?s=${encodeURIComponent(moeSeriesName)}&p=1`; // Search on page 1
+  try {
+      const searchRes = await asyncReq(searchUrl, 'GET', undefined, {}, 'text'); // Explicitly text for regex
+      // Regex to find datainfo-B entries (which often contain book info)
+      // datainfo-B=[分类],[ID],[标题],[作者],[出版日期]
+      const idxRe = /datainfo-B=[^,]+,(\d+),(.*?),([^,]*?),[\d-]+/g; // Made author group more flexible
+      // BoF script content might be split. Concatenate or iterate.
+      // The original split by '<script>' and iterated. This should be fine.
+      const scriptArr = searchRes.split('<script>');
+      const results = [];
+      scriptArr.forEach((scriptContent) => {
+          let match;
+          while ((match = idxRe.exec(scriptContent)) !== null) {
+              const [_, id, title, author] = match;
+              if (id && title) {
+                  results.push({
+                      id: id.trim(),
+                      title: t2s(title.trim()), // Convert title back to simplified
+                      author: t2s(author.trim() || '未知作者'), // Convert author, provide default
+                      cover: null // BoF search results don't have covers directly
+                  });
+              }
+          }
+      });
+      return results.length > 8 ? results.slice(0, 8) : results;
+  } catch (error) {
+      console.error(`[fetchMoeBookByName] Failed for "${seriesName}":`, error);
+      // showMessage handled by caller
+      throw error;
+  }
+}
+
+async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') {
+    const moeSeriesUrl = reqSeriesUrl || `${bofUrl}/b/${reqSeriesId}.htm`;
+    const urlMatch = moeSeriesUrl.match(/https:\/\/bookof\.moe\/b\/(.*?)\.htm/);
+    const moeSeriesId = urlMatch ? urlMatch[1] : null;
+    if (!moeSeriesId) throw new Error(`Could not extract BoF ID from URL: ${moeSeriesUrl}`);
+
+    const seriesRes = await asyncReq(moeSeriesUrl, 'GET', undefined, {}, 'text');
+    const resEle = document.createElement('div');
+    resEle.innerHTML = seriesRes.toString();
+
+    let seriesMeta = {
+        title: '', titleLock: false, titleSort: '', titleSortLock: false, status: '', statusLock: false,
+        tags: [], tagsLock: false, links: [{ label: 'Bof', url: moeSeriesUrl }], linksLock: false,
+        publisher: '', publisherLock: false, totalBookCount: null, totalBookCountLock: false,
+        summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
+        ageRating: '', ageRatingLock: false,
+    };
+    let authors = [];
+    let bookCoverFrameUrl = null; // 这个是 data_vol.php 或 temp_... 的 URL
+
+    resEle.querySelectorAll('script').forEach(script => {
+        const scriptContent = script.textContent || '';
+        const coverUrlMatch = scriptContent.match(/window\.iframe_action\.location\.href\s*=\s*"(.*?)"/);
+        if (coverUrlMatch && coverUrlMatch[1]) {
+            let pathOrUrl = coverUrlMatch[1];
+            if (pathOrUrl.toLowerCase().startsWith('http://') || pathOrUrl.toLowerCase().startsWith('https://')) {
+                bookCoverFrameUrl = pathOrUrl;
+            } else {
+                bookCoverFrameUrl = bofUrl + (pathOrUrl.startsWith('/') ? pathOrUrl : '/' + pathOrUrl);
+            }
+        }
+    });
+
+    const mainEle = resEle.querySelector('td.author');
+    if (!mainEle) throw new Error('Could not find main content element (td.author) on BoF page');
+
+    const r18Img = mainEle.querySelector('img#logo_r18');
+    seriesMeta.ageRating = (r18Img ? r18Img.style.display !== 'none' : false) ? 18 : null;
+
+    const seriesOriNameElement = mainEle.querySelector('.name_main');
+    const seriesOriName = seriesOriNameElement ? seriesOriNameElement.textContent.trim() : '';
+    if (!seriesOriName) throw new Error('Could not parse main title (.name_main) from BoF page');
+
+    seriesMeta.title = t2s(seriesOriName); // Simplified Chinese title
+    seriesMeta.titleSort = seriesMeta.title;
+    seriesMeta.alternateTitles.push({ label: '原名', title: seriesOriName }); // Original (Traditional Chinese) title
+
+    const nameSubtElements = mainEle.querySelectorAll('.name_subt');
+    let infoEleText = ''; // For status and tags
+    if (nameSubtElements.length > 0) {
+        const seriesNameStr = nameSubtElements[0].textContent || '';
+        const seriesNameArr = seriesNameStr.match(/\(([^)]+)\)\s*(.*)/); // (EnglishName) OtherInfo
+        const seriesEngName = seriesNameArr ? seriesNameArr[1]?.trim() : null;
+        if (seriesEngName && seriesEngName.toLowerCase() !== seriesMeta.title.toLowerCase() && seriesEngName !== seriesOriName) {
+            seriesMeta.alternateTitles.push({ label: '别名', title: capitalize(seriesEngName) });
+        }
+        infoEleText = (nameSubtElements.length > 1) ? (nameSubtElements[1].textContent || '') : seriesNameStr;
+    }
+
+    const seriesDescElement = resEle.querySelector('div#div_desctext');
+    let seriesDesc = seriesDescElement ? seriesDescElement.textContent.trim() : '';
+    seriesMeta.summary = t2s(seriesDesc.replace(/[\r\n]+/g, '\n').replace(/\【.*?\】$/,'').trim());
+
+    mainEle.querySelectorAll('a[href^="https://bookof.moe/s/AUT"]').forEach(link => {
+        const authorName = t2s(link.textContent?.trim());
+        if (authorName) authors.push({ name: authorName, role: 'writer' }); // BoF doesn't usually specify roles beyond "author"
+    });
+    seriesMeta.authors = authors;
+
+
+    if (infoEleText) {
+        const statusMatch = infoEleText.match(/狀態：(.*?)(?:\s|分类：|$)/);
+        const status = statusMatch ? t2s(statusMatch[1].trim()) : '';
+        switch (status) {
+            case '连载': seriesMeta.status = 'ONGOING'; break;
+            case '完结': seriesMeta.status = 'ENDED'; break;
+            case '停更': case '休刊': seriesMeta.status = 'HIATUS'; break;
+            case '弃坑': case '放弃': seriesMeta.status = 'ABANDONED'; break;
+        }
+
+        const tagsMatch = infoEleText.match(/分類：(.*?)(?:\n|$)/);
+        if (tagsMatch && tagsMatch[1]) {
+            seriesMeta.tags = tagsMatch[1].trim().split(/\s+/).filter(Boolean).map(t => t2s(t));
+        }
+    }
+
+    seriesMeta.links.push({ label: 'Mox', url: `https://kox.moe/c/${moeSeriesId}.htm` }); // Add Mox link
+
+    const seriesNameForDisplay = seriesMeta.title || '未知系列';
+    let finalMeta = await filterSeriesMeta(komgaSeriesId, seriesMeta);
+    finalMeta = Object.fromEntries(Object.entries(finalMeta).filter(([_, v]) => v !== null && v !== '' || Array.isArray(v) ));
+    await updateKomgaSeriesMeta(komgaSeriesId, seriesNameForDisplay, finalMeta);
+
+    const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
+    const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
+    const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBookAuthors(seriesBooks, finalMeta.authors);
+
+    if (fetchSeriesType === 'all') {
+        let bofVolumeRawCoverUrls = [];
+        if (bookCoverFrameUrl) {
+            try {
+                const coverFrameRes = await asyncReq(bookCoverFrameUrl, 'GET', undefined, {}, 'text');
+                const coverRe = /datainfo-V=\d+,[^,]+,[^,]+,[^,]+,([^,]+),[^,]+/g; // datainfo-V=ID,Title,Type,Unknown,CoverURL,Unknown
+                let coverMatch;
+                while ((coverMatch = coverRe.exec(coverFrameRes)) !== null) {
+                    if (coverMatch[1]) { // coverMatch[1] 是 CoverURL 部分
+                        let imageUrlFromFrame = coverMatch[1];
+                        let finalImageUrl;
+                        // console.log("[BoF] Raw image URL from datainfo-V:", imageUrlFromFrame); // 调试
+                        if (imageUrlFromFrame.toLowerCase().startsWith('http://') || imageUrlFromFrame.toLowerCase().startsWith('https://')) {
+                            // 如果 imageUrlFromFrame 已经是绝对 URL (例如 https://img.mxomo.com/...)
+                            finalImageUrl = imageUrlFromFrame;
+                        } else {
+                            // 否则，假定它是相对于 bofUrl 的路径 (例如 /pic/V/123.jpg)
+                            finalImageUrl = bofUrl + (imageUrlFromFrame.startsWith('/') ? imageUrlFromFrame : '/' + imageUrlFromFrame);
+                        }
+                        // console.log("[BoF] Processed finalImageUrl for volume:", finalImageUrl); // 调试
+                        bofVolumeRawCoverUrls.push(finalImageUrl);
+                    }
+                }
+            } catch (coverError) {
+                console.error(`[BoF] Error fetching/parsing cover frame for ${seriesNameForDisplay} from ${bookCoverFrameUrl}:`, coverError);
+                showMessage(`《${seriesNameForDisplay}》BoF 封面数据获取/解析失败: ${coverError.message || coverError}`, 'error');
+            }
+        } else {
+            showMessage(`《${seriesNameForDisplay}》未找到 BoF 封面配置脚本，无法更新封面`, 'warning');
+        }
+
+        // 更新系列主封面和卷封面
+        if (bofVolumeRawCoverUrls.length > 0) {
+            await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, [bofVolumeRawCoverUrls[0]]); // 使用第一个卷的封面作为系列封面
+            const bofBookVolumeCoverSets = bofVolumeRawCoverUrls.map(url => ({ coverUrls: [url] })); // BoF usually has one cover per vol
+            await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bofBookVolumeCoverSets);
+        } else {
+            if (bookCoverFrameUrl) { // If frame URL existed but parsing failed
+                 showMessage(`《${seriesNameForDisplay}》未能从 BoF 封面数据中解析出有效封面链接`, 'warning');
+            }
+            if (updateAuthorsFlag) { // 即使没有封面，也可能需要更新作者
+                 await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+            }
+        }
+    } else if (updateAuthorsFlag) { // 'meta' only sync, but authors need update
+        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+    }
+}
+//</editor-fold>
+
+async function search(komgaSeriesId, $dom) {
+    if (!komgaSeriesId) { showMessage('Komga Series ID 无效', 'error'); return; }
+    if (!$dom || $dom.length === 0) {
+         $dom = findDomElementForSeries(komgaSeriesId);
+         if (!$dom) { showMessage(`无法找到系列 ${komgaSeriesId} 的界面元素`, 'error'); return; }
+    }
+
+    const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId);
+    // No early exit if !komgaMeta, selectSeriesTitle will use series.name
+    const komgaMetaLinks = komgaMeta?.links || []; // Handle if komgaMeta is null
+
+    const $selSourcePanel = $('<div></div>').css({ ...selPanelStyle });
+    sourceLabels.forEach((label) => { // 'Btv', 'Bof'
+        const $selSourceBtn = $('<button></button>')
+            .append('<div>' + label + '</div>')
+            .attr('sourceLabel', label).css({ ...selPanelBtnStyle });
+
+        const linkObj = komgaMetaLinks.find((link) => link.label && link.label.toLowerCase() === label.toLowerCase());
+        if (linkObj) {
+             $selSourceBtn.append('<div style="font-size: 10px; color: lightgreen;">(链接已存在)</div>');
+             $selSourceBtn.attr('existingUrl', linkObj.url);
+        }
+
+        $selSourceBtn.on('click', async function (e) {
+            e.stopPropagation();
+            const sourceLabel = $(this).attr('sourceLabel'); // 'Btv' or 'Bof'
+            const existingUrl = $(this).attr('existingUrl'); // e.g., https://bangumi.tv/subject/XXXX or https://bookof.moe/b/YYYY.htm
+            localStorage.setItem(`STY-${komgaSeriesId}`, sourceLabel.toLowerCase()); // Store 'btv' or 'bof'
+            $selSourcePanel.remove();
+
+            if (existingUrl) {
+                showMessage(`找到 ${sourceLabel} 链接，直接获取...`, 'info');
+                partLoadingStart($dom); // Start loading before fetchBookByUrl
+                // For BTV, existingUrl is like bangumi.tv/subject/ID. We need the ID for API.
+                // For BOF, existingUrl is fine.
+                let sourceId = 0; // For BTV API, this will be the subject ID. For BOF, it's part of the URL.
+                if (sourceLabel.toLowerCase() === 'btv') {
+                    const idMatch = existingUrl.match(/subject\/(\d+)/);
+                    if (idMatch && idMatch[1]) {
+                        sourceId = idMatch[1]; // This is the reqSeriesId for fetchBtvSubjectByUrlAPI
+                    } else {
+                         showMessage(`无法从现有 Btv 链接解析 ID: ${existingUrl}`, 'error');
+                         partLoadingEnd($dom);
+                         return; // Stop if ID cannot be parsed for Btv API
+                    }
+                }
+                // fetchBookByUrl will handle its own partLoadingEnd
+                await fetchBookByUrl(komgaSeriesId, sourceId, existingUrl, sourceLabel.toLowerCase());
+                // partLoadingEnd($dom); // Moved to fetchBookByUrl's finally block
+            } else {
+                 // No existing link, proceed to title selection then search
+                 try {
+                     await selectSeriesTitle(komgaSeriesId, $dom);
+                 } catch (selectionError) {
+                     // Error message already shown by selectSeriesTitle or its callees
+                     // console.warn("Title selection was cancelled or failed:", selectionError);
+                 }
+            }
+        });
+        $selSourcePanel.append($selSourceBtn);
+    });
+
+    // Add a general cancel button for the source selection panel
+    const $cancelBtn = $('<button></button>').append('<div> 取消 </div>')
+        .css({ ...selPanelBtnStyle, backgroundColor: '#f44336', height: 'auto', minHeight: '50px', padding: '10px' })
+        .on('click', function (e) {
+            e.stopPropagation();
+            $selSourcePanel.remove();
+            showMessage('操作已取消', 'warning');
+        });
+    $selSourcePanel.append($cancelBtn);
+    $selSourcePanel.appendTo('body');
+}
+
+// ************************************** 批量匹配功能 **************************************
+//<editor-fold desc="批量匹配功能">
+async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'btv', syncType = 'meta', batchStats) {
+    let $domForLoading = findDomElementForSeries(komgaSeriesId);
+    if ($domForLoading) partLoadingStart($domForLoading);
+
+    let matchResult = {
+        success: false,
+        seriesId: komgaSeriesId,
+        name: oriKomgaTitle, // Initial name, will be updated
+        skipped: false,
+        error: 'Unknown error during precise match'
+    };
+
+    try {
+        const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId);
+        const seriesName = (komgaMeta?.title?.trim()) || (oriKomgaTitle?.trim()) || (await getKomgaOriTitle(komgaSeriesId))?.trim();
+        matchResult.name = seriesName || oriKomgaTitle; // Update name with potentially better title
+
+        // Check for existing link for the specified searchType
+        if (komgaMeta?.links?.find(l => l.label?.toLowerCase() === searchType.toLowerCase() && l.url)) {
+            showMessage(`[批量] 《${matchResult.name}》已存在 ${searchType.toUpperCase()} 链接，跳过。`, 'info', 2500);
+            matchResult = { ...matchResult, success: true, skipped: true, reason: `Existing ${searchType.toUpperCase()} link` };
+            if ($domForLoading) partLoadingEnd($domForLoading);
+            return matchResult;
+        }
+
+        localStorage.setItem(`SID-${komgaSeriesId}`, syncType); // e.g., 'meta'
+        localStorage.setItem(`STY-${komgaSeriesId}`, searchType); // e.g., 'btv'
+
+        if (!seriesName) {
+            showMessage(`[批量] 系列 ${komgaSeriesId} 无有效标题用于匹配。`, 'error');
+            matchResult.error = 'No valid title for matching';
+        } else {
+            const searchTerm = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').trim());
+            if (!searchTerm) {
+                showMessage(`[批量]《${matchResult.name}》从"${seriesName}"解析搜索词失败。`, 'warning');
+                matchResult.error = 'No valid search term parsed from title';
+            } else {
+                // seriesListRes: [{ id, title, orititle, author, cover, aliases }, ...]
+                let seriesListRes = await fetchBookByName(searchTerm, searchType);
+                let preciseMatch = null;
+                let matchedField = null; // 'title', 'orititle', or 'alias'
+                const normalizedSearchTermForComparison = searchTerm.toLowerCase();
+
+                // 1. 尝试匹配 item.title (通常是 name_cn)
+                preciseMatch = seriesListRes.find(item =>
+                    item.title && t2s(String(item.title)).toLowerCase() === normalizedSearchTermForComparison
+                );
+                if (preciseMatch) {
+                    matchedField = 'title (name_cn/name)';
+                } else {
+                    // 2. 尝试匹配 item.orititle (通常是 name)
+                    preciseMatch = seriesListRes.find(item =>
+                        item.orititle && t2s(String(item.orititle)).toLowerCase() === normalizedSearchTermForComparison
+                    );
+                    if (preciseMatch) {
+                        matchedField = 'orititle (name)';
+                    } else {
+                        // 3. 新增：尝试匹配 item.aliases (别名)
+                        preciseMatch = seriesListRes.find(item => {
+                            if (item.aliases && typeof item.aliases === 'string' && item.aliases.trim() !== '') {
+                                const individualAliases = item.aliases.split(' / '); // 按 " / " 分割
+                                return individualAliases.some(alias =>
+                                    t2s(String(alias).trim()).toLowerCase() === normalizedSearchTermForComparison
+                                );
+                            }
+                            return false;
+                        });
+                        if (preciseMatch) {
+                            matchedField = 'alias';
+                        }
+                    }
+                }
+
+
+                if (preciseMatch) {
+                    const displayMatchedTitle = preciseMatch.title || preciseMatch.orititle || "未知匹配标题";
+                    showMessage(`[批量]《${matchResult.name}》精确匹配 (${matchedField}):《${displayMatchedTitle}》。更新...`, 'info', 3000);
+                    // preciseMatch.id is the Bangumi/BoF ID. No URL needed here for fetchBookByUrl
+                    await fetchBookByUrl(komgaSeriesId, preciseMatch.id, '', searchType); // searchType is 'btv' or 'bof'
+                    matchResult = {
+                        ...matchResult,
+                        success: true,
+                        matchedWithTitle: displayMatchedTitle,
+                        matchedSourceField: matchedField,
+                        skipped: false
+                    };
+                    // partLoadingEnd($domForLoading) is handled by fetchBookByUrl's finally block
+                    return matchResult; // 成功
+                } else {
+                    const msg = seriesListRes.length > 0 ? "无精确匹配 (标题, 原始标题或别名)" : "未找到结果";
+                    showMessage(`[批量]《${matchResult.name}》(词:"${searchTerm}") ${msg}。`, 'warning', 4000);
+                    matchResult.error = seriesListRes.length > 0 ? 'No exact title, orititle, or alias match' : 'No search results from source';
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`[批量] 处理系列 ${komgaSeriesId} ("${matchResult.name}") 出错:`, error);
+        showMessage(`[批量] 处理《${matchResult.name}》出错: ${error.message || String(error)}`, 'error');
+        matchResult.error = error.message || String(error);
+        matchResult.success = false; // Ensure success is false on catch
+    }
+
+    // If not successful and not skipped, add to manual match collection
+    if (!matchResult.success && !matchResult.skipped) {
+        if (batchStats) { // Ensure batchStats object is passed
+            const added = await addSeriesToManualMatchCollectionImmediately(komgaSeriesId, matchResult.name);
+            if (added) batchStats.addedToCollectionCount++;
+        }
+    }
+
+    if ($domForLoading) partLoadingEnd($domForLoading); // Ensure loading ends if preciseMatch didn't lead to fetchBookByUrl call or if error before that
+    return matchResult;
+}
+
+async function getAllSeriesInLibrary(libraryId) {
+    let allSeries = [], page = 0, totalPages = 1;
+    showMessage(`正在获取数据库 #${libraryId} 所有系列...`, 'info');
+    try {
+        do {
+            const respStr = await asyncReq(`${location.origin}/api/v1/series?library_id=${libraryId}&page=${page}&size=200&sort=metadata.titleSort,asc`, 'GET');
+            const resp = JSON.parse(respStr);
+            if (resp?.content) {
+                allSeries = allSeries.concat(resp.content);
+                totalPages = resp.totalPages;
+                page++;
+                if (totalPages > 1) { // Only show progress if multiple pages
+                    showMessage(`已获取 ${allSeries.length}/${resp.totalElements || '?'} 系列... (页 ${page}/${totalPages})`, 'info', 2000);
+                }
+            } else {
+                // Handle cases where content might be empty but pagination info exists
+                if (resp && typeof resp.totalPages !== 'undefined') {
+                     totalPages = resp.totalPages;
+                     if (page >= totalPages) break; // All pages (possibly empty) processed
+                }
+                console.warn('[getAllSeriesInLibrary] API response invalid or empty content for a page:', resp);
+                if (allSeries.length === 0 && page === 0) { // If first page is bad and no series yet
+                    throw new Error('API响应无效或数据库为空。');
+                }
+                break; // Exit loop if response is not as expected but not on first empty page
+            }
+        } while (page < totalPages);
+        showMessage(`数据库 #${libraryId} 系列列表获取完毕，共 ${allSeries.length} 个。`, 'success');
+        return allSeries;
+    } catch (e) {
+        console.error(`[getAllSeriesInLibrary] Failed for library ${libraryId}:`, e);
+        showMessage(`获取数据库 #${libraryId} 系列列表失败: ${e.message || e}.`, 'error', 10000);
+        return []; // Return empty on error
+    }
+}
+
+async function batchMatchLibrarySeries(libraryId) {
+    showMessage(`开始对数据库 #${libraryId} 系列批量精确匹配...`, 'info', 10000);
+    _manualMatchCollectionId = null; // Reset collection ID cache for this batch run
+    _manualMatchCollectionExistingSeriesIds = []; // Reset series ID cache
+
+    let batchStats = { successCount: 0, failureCount: 0, skippedCount: 0, addedToCollectionCount: 0 };
+    const seriesObjects = await getAllSeriesInLibrary(libraryId);
+
+    if (!seriesObjects || seriesObjects.length === 0) {
+        showMessage('未能获取系列ID，批量中止。', 'warning');
+        return;
+    }
+
+    for (let i = 0; i < seriesObjects.length; i++) {
+        const seriesObj = seriesObjects[i];
+        // Use Komga's metadata.title if available, otherwise series.name (folder name)
+        const seriesName = seriesObj.metadata.title || seriesObj.name;
+        showMessage(`[批量 ${i + 1}/${seriesObjects.length}] 处理:《${seriesName}》(ID:${seriesObj.id})`, 'info', 3500);
+
+        // Default to 'btv' (Bangumi API) and 'meta' sync for batch mode
+        const result = await preciseMatchSeries(seriesObj.id, seriesName, 'btv', 'meta', batchStats);
+
+        if (result.skipped) {
+            batchStats.skippedCount++;
+        } else if (result.success) {
+            batchStats.successCount++;
+        } else {
+            batchStats.failureCount++;
+            console.warn(`[批量匹配] 系列 ${seriesObj.id} (${result.name || seriesName}) 失败: ${result.error}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 300)); // Polite delay
+    }
+
+    let summary = `批量精确匹配完成！库#${libraryId}：成功 ${batchStats.successCount}，失败 ${batchStats.failureCount}，跳过 ${batchStats.skippedCount}，共 ${seriesObjects.length}。`;
+    if (batchStats.addedToCollectionCount > 0) {
+        summary += ` ${batchStats.addedToCollectionCount} 个系列已添加/更新至 "${MANUAL_MATCH_COLLECTION_NAME}"。`;
+    } else if (batchStats.failureCount > 0 && _manualMatchCollectionId) { // Collection was accessed/created
+        summary += ` (失败系列或已在 "${MANUAL_MATCH_COLLECTION_NAME}" 中)。`;
+    } else if (batchStats.failureCount > 0 && !_manualMatchCollectionId) { // Collection not accessed/created (e.g., error during its creation)
+        summary += ` (因收藏夹操作失败，未能记录失败系列)。`;
+    }
+    showMessage(summary, 'success', 20000);
+}
+
+function addBatchMatchButtonIfNeeded() {
+    const libPathMatch = window.location.pathname.match(/\/libraries\/([a-zA-Z0-9]+(?:-sync)?)/);
+    if (libPathMatch && libPathMatch[0].startsWith('/libraries/')) { // Check if it's a library page
+        const libraryId = libPathMatch[1].replace('-sync', ''); // Get actual library ID
+        if ($('#batchMatchLibraryBtn').length > 0) return; // Button already exists
+
+        const isDark = $('div#app')?.hasClass('theme--dark'); // Check theme for Vuetify classes
+        const themeClass = isDark ? 'theme--dark' : 'theme--light';
+
+        const $btn = $(`
+            <button id="batchMatchLibraryBtn" type="button"
+                    class="v-btn v-btn--flat ${themeClass} v-size--default mx-1"
+                    title="批量精确匹配本库 (元数据：Bangumi API)">
+                <span class="v-btn__content">
+                    <i aria-hidden="true" class="v-icon notranslate mdi mdi-target-variant ${themeClass} left v-icon--left"></i>
+                    全库精配
+                </span>
+            </button>
+        `);
+
+        $btn.on('click', async () => {
+            if (confirm(`即将对数据库 #${libraryId} 所有系列进行精确匹配。\n\n规则：\n- 元数据源：Bangumi API (Btv)\n- 更新类型：仅元数据 (不含封面)\n- 匹配方式：\n  - 若系列已有关联的 Btv 链接，则跳过。\n  - 否则，使用系列标题在 Btv 进行精确搜索。\n  - 精确匹配：搜索结果的中文名/原名/别名与系列标题完全一致。\n- 失败处理：匹配失败的系列将尝试添加至名为 "${MANUAL_MATCH_COLLECTION_NAME}" 的收藏夹中。\n\n是否继续？`)) {
+                await batchMatchLibrarySeries(libraryId);
+            }
+        });
+
+        // Try to insert the button in a reasonable place in the toolbar
+        const $toolbar = $('header.v-app-bar .v-toolbar__content').first();
+        if ($toolbar.length > 0) {
+            // Attempt to place it before common action buttons or at the end
+            let $point = $toolbar.find('.v-spacer').next('button, .v-btn').first() || // After spacer, before first button
+                         $toolbar.find('.v-spacer').nextAll('button, .v-btn').first() || // Fallback to any button after spacer
+                         $toolbar.find('button:has(i.mdi-pencil), button:has(i.mdi-checkbox-multiple-marked-outline)').first(); // Before edit/select buttons
+            if ($point.length > 0) {
+                $point.before($btn);
+            } else {
+                $toolbar.append($btn); // Append if no suitable insertion point found
+            }
+        } else {
+            console.error("KomgaPatcher: 无法找到工具栏添加批量按钮。");
+        }
+    } else {
+        // Not a library page, remove button if it exists from a previous page
+        $('#batchMatchLibraryBtn').remove();
+    }
+}
+//</editor-fold>
+
+function main() {
+    console.log("KomgaPatcher (API version) script started. Setting up observer.");
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+                if (node.nodeType === 1) { // Process only element nodes
+                    // For series cards (grid/list view)
+                    const $potentialCards = $(node).find('div[class*="v-card"], div.my-2.mx-2, .card-container').addBack('div[class*="v-card"], div.my-2.mx-2, .card-container');
+                    $potentialCards.each(function () {
+                        const $card = $(this);
+                        if ($card.find('button[komgaseriesid]').length > 0) return; // Buttons already added
+                        const $linkDiv = $card.find('a[href*="/series/"]').first();
+                        if ($linkDiv.length > 0) {
+                            const href = $linkDiv.attr('href');
+                            const idMatch = href ? href.match(/\/series\/(\w+)/) : null;
+                            if (idMatch && idMatch[1]) {
+                                loadSearchBtn($card, idMatch[1]);
+                            }
+                        }
+                    });
+
+                    // For series detail view (card is usually a direct child of container structure)
+                    // More specific selector for detail view to avoid conflicts
+                    let $detailCard = $(node).find('div.container > div > div > .v-card:first-child').addBack('div.container > div > div > .v-card:first-child');
+                    if ($detailCard.length > 0 ) {
+                         $detailCard = $detailCard.first(); // Ensure only one if multiple somehow match
+                         // Check if it's actually a series detail page context, e.g. by URL
+                         const currentHref = location.href.replace(/%2F/g, '/'); // Handle encoded slashes
+                         const detailMatch = currentHref.match(/\/series\/(\w+)/);
+                         if (detailMatch && detailMatch[1]) {
+                             if ($detailCard.find('button[komgaseriesid]').length > 0) return;
+                             loadSearchBtn($detailCard, detailMatch[1]);
+                         }
+                    }
+                }
+            });
+        });
+        // After DOM mutations, re-check if batch button needs to be added/removed
+        addBatchMatchButtonIfNeeded();
+    });
+
+    // Start observing the main app container or body
+    let observerIntervalId = setInterval(function () {
+        const targetNode = document.getElementById('app') || document.body;
+        if (targetNode) {
+             observer.observe(targetNode, { childList: true, subtree: true });
+             clearInterval(observerIntervalId);
+             console.log("KomgaPatcher: Observer attached. Performing initial UI checks...");
+             // Initial run for elements already on the page
+             $('div[class*="v-card"], div.my-2.mx-2, .card-container').each(function() { // Cards in library view
+                   const $card = $(this);
+                   if ($card.find('button[komgaseriesid]').length === 0) { // No buttons yet
+                       const $linkDiv = $card.find('a[href*="/series/"]').first();
+                       if ($linkDiv.length > 0) {
+                           const href = $linkDiv.attr('href');
+                           const idMatch = href ? href.match(/\/series\/(\w+)/) : null;
+                           if (idMatch && idMatch[1]) loadSearchBtn($card, idMatch[1]);
+                       }
+                   }
+              });
+              // Initial run for detail view if already on such a page
+              const $initialDetailCard = $('div.container > div > div > .v-card:first-child').first();
+               if ($initialDetailCard.length > 0 && $initialDetailCard.find('button[komgaseriesid]').length === 0) {
+                   const currentHref = location.href.replace(/%2F/g, '/');
+                   const detailMatch = currentHref.match(/\/series\/(\w+)/);
+                   if (detailMatch && detailMatch[1]) loadSearchBtn($initialDetailCard, detailMatch[1]);
+               }
+             addBatchMatchButtonIfNeeded(); // Initial check for batch button
+        }
+    }, 500);
+
+    loadMessage(); // Setup message area
+
+    // Register Tampermonkey menu command for setting Bangumi Access Token
+    if (typeof GM_registerMenuCommand === "function") {
+        GM_registerMenuCommand('设置Bangumi Access Token', setBangumiAccessToken, 'B'); // 'B' 是一个快捷访问键
+    }
+
+    console.log("KomgaPatcher main execution finished setting up.");
+}
+
+// Handle SPA navigation
+const _wr = function (type) {
+  const orig = history[type];
+  return function () {
+    const rv = orig.apply(this, arguments);
+    const e = new Event(type);
+    e.arguments = arguments;
+    window.dispatchEvent(e);
+    return rv;
+  };
+};
+history.pushState = _wr('pushState');
+history.replaceState = _wr('replaceState');
+
+function handleNavigation() {
+    // console.log("KomgaPatcher: Navigation detected (pushState/popstate), re-evaluating UI elements.");
+    // Delay slightly to allow Komga's UI to render after navigation
+    setTimeout(() => {
+        // Buttons on cards/detail view are handled by MutationObserver.
+        // Only need to explicitly re-check for the batch button here.
+        addBatchMatchButtonIfNeeded();
+    }, 700); // Adjust delay if needed
+}
+
+window.addEventListener('pushState', handleNavigation);
+window.addEventListener('popstate', handleNavigation); // Handles browser back/forward
+
+// Initial load
+console.log("KomgaPatcher (API version with Token support & Expiry Hint) initial load, running main setup...");
+setTimeout(() => {
+    main();
+}, 700); // Delay main execution slightly to ensure Komga's base UI is more likely to be ready
