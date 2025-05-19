@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.2.3
+// @version      2.2.4
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -297,9 +297,12 @@ function loadSearchBtn($dom, komgaSeriesId) {
     let $syncAll = $('<button title="更新元数据和封面"></button>').attr('komgaSeriesId', komgaSeriesId);
     const currentBtnStyle = { ...btnStyle, width: btnDia, height: btnDia };
 
-    // 检查当前是否在 /collections 页面
-    if (window.location.pathname.includes('/collections')) {
-        // 在 /collections 页面，图标移动到左侧
+    // 检查当前是否在 '/collections' 或 '/readlists' 页面
+    const leftSidePages = ['/collections', '/readlists'];
+    const isLeftSidePage = leftSidePages.some(path => window.location.pathname.includes(path));
+
+    if (isLeftSidePage) {
+        // 在 '/collections' 或 '/readlists' 页面，图标移动到左侧
         $syncAll.css({ ...currentBtnStyle, left: '10px' }); // 第一个图标靠左
         $syncInfo.css({ ...currentBtnStyle, left: btnDia + 15 + 'px' }); // 第二个图标在第一个图标的右边
     } else {
@@ -1169,7 +1172,7 @@ async function fetchBtvSubjectByNameAPI(seriesName) {
         nsfw: true // 搜索结果包含 nsfw 条目，需要设置 Bangumi API Access Token
       }
     };
- 
+
     try {
       const searchResStr = await asyncReq(searchUrl, 'POST', requestBody, {});
       const searchRes = JSON.parse(searchResStr);
