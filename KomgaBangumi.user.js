@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.2.4
+// @version      2.3.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -512,63 +512,76 @@ async function performSearchAndHandleResults(searchTerm, komgaSeriesId, $dom, se
     // partLoadingEnd($dom); // This was here, but fetchBookByUrl handles its own partLoadingEnd now.
 }
 
+function extractSeriesTitles(seriesName, limitToFirst = true) {
+    let cleaned = seriesName.replace(/^\[|\]$/g, '');
+    let parts = cleaned.split(/\[|\]/).filter(Boolean);
+    let baseTitles = parts.length >= 2 ? [parts[0], parts[1]] : [parts[0] || ''];
+
+    let authorSplit = baseTitles.shift().split('×');
+    let titleParts = [...authorSplit, ...baseTitles];
+
+    let cleanedTitles = titleParts.map((t) =>
+        t2s(t.split(/[ （(_~]/)[0].trim())
+    );
+
+    const minimalProcessedTitle = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').replace(/[（()）]/g, ' ').trim());
+    const finalTitles = [...new Set(
+        cleanedTitles
+            .map(t => t.replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim())
+            .filter(Boolean)
+    )];
+
+    if (minimalProcessedTitle && !finalTitles.includes(minimalProcessedTitle)) {
+        finalTitles.unshift(minimalProcessedTitle);
+    }
+
+    return limitToFirst ? finalTitles[0] : finalTitles;
+}
+
 async function selectSeriesTitle(komgaSeriesId, $dom) {
     return new Promise(async (resolve, reject) => {
-        const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId);
-        const oriTitle = await getKomgaOriTitle(komgaSeriesId); // series.name
-        const seriesName = (komgaMeta && komgaMeta.title && komgaMeta.title.trim()) || oriTitle;
+        const komgaMeta = await getKomgaSeriesMeta(komgaSeriesId).catch(() => null);
+        const oriTitle = await getKomgaOriTitle(komgaSeriesId).catch(() => '');
+        const seriesName = (komgaMeta?.title?.trim()) || oriTitle;
+
         if (!seriesName) {
-             showMessage(`无法获取系列 ${komgaSeriesId} 的标题`, 'error');
-             return reject('Failed to get original title');
+            showMessage(`无法获取系列 ${komgaSeriesId} 的标题`, 'error');
+            return reject('Failed to get original title');
         }
-        // Simplified title extraction logic, assuming Komga title is often cleaner
-        let seriesNamesTemp = seriesName.replace(/^\[|\]$/g, ''); // Remove leading/trailing brackets
-        let seriesNames = seriesNamesTemp.split(/\[|\]/).filter(Boolean); // Split by brackets
-        let komgaSeriesTitles = seriesNames.length >= 2 ? [seriesNames[0], seriesNames[1]] : [seriesNames[0]];
-        // Further split first part if it contains author-like patterns (e.g., "Author [Title]")
-        let authorTitle = komgaSeriesTitles.shift().split('×'); // if '×' is used as separator
-        komgaSeriesTitles = [...authorTitle, ...komgaSeriesTitles];
-        komgaSeriesTitles = komgaSeriesTitles.map((t) =>
-            t2s(t.split(' ')[0].split('(')[0].split('（')[0].split('_')[0].split('~')[0].split('♂')[0].split('♀')[0].trim())
-        );
-        // Add the original seriesName (after basic cleaning) as the first option, as it's often the best
-        const minimalProcessedTitle = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').trim());
-        const selTitlesRaw = komgaSeriesTitles.map((t) => t.replace(/[:：!！]/g, '')).filter(Boolean);
-        if (minimalProcessedTitle && !selTitlesRaw.includes(minimalProcessedTitle)) {
-             selTitlesRaw.unshift(minimalProcessedTitle);
-        }
-        const selTitles = [...new Set(selTitlesRaw)].filter(Boolean); // Unique, non-empty titles
+
+        const selTitles = extractSeriesTitles(seriesName, false);
         const $selTitlePanel = $('<div></div>').css({ ...selPanelStyle });
         const searchType = localStorage.getItem(`STY-${komgaSeriesId}`); // 'btv' or 'bof'
+
         if (selTitles.length > 0) {
             selTitles.forEach((title) => {
-                let $selTitleBtn = $('<button></button>').text(title).css(selPanelBtnStyle);
-                $selTitleBtn.on('click', async function (e) {
+                let $btn = $('<button></button>').text(title).css(selPanelBtnStyle);
+                $btn.on('click', async function (e) {
                     e.stopPropagation();
                     $selTitlePanel.remove();
                     try {
                         await performSearchAndHandleResults(title, komgaSeriesId, $dom, searchType);
                         resolve();
-                    } catch (searchError) {
-                        // Error message already shown by performSearchAndHandleResults
-                        reject(searchError);
+                    } catch (err) {
+                        reject(err);
                     }
                 });
-                $selTitlePanel.append($selTitleBtn);
+                $selTitlePanel.append($btn);
             });
         } else {
-             const $noAutoTitleMsg = $('<div style="grid-column: 1 / -1; text-align: center; padding: 10px; color: #555;">未能自动提取关键词，请手动输入。</div>');
-             $selTitlePanel.append($noAutoTitleMsg);
+            const $msg = $('<div style="grid-column: 1 / -1; text-align: center; padding: 10px; color: #555;">未能自动提取关键词，请手动输入。</div>');
+            $selTitlePanel.append($msg);
         }
-        // Manual input section
+
         const $manualInputContainer = $('<div></div>').css({
-            gridColumn: '1 / -1', // Span all columns
+            gridColumn: '1 / -1',
             display: 'flex',
             gap: '10px',
             marginTop: '15px',
             padding: '10px',
             borderTop: '1px solid #ccc'
         });
+
         const $manualInput = $('<input type="text">').attr('id', 'manualSearchInput').css({
             flexGrow: 1,
             padding: '8px 10px',
@@ -576,15 +589,21 @@ async function selectSeriesTitle(komgaSeriesId, $dom) {
             borderRadius: '4px',
             fontSize: '14px'
         }).attr('placeholder', '或在此手动输入搜索词');
+
         const $manualSearchBtn = $('<button>手动搜索</button>').css({
-             ...selPanelBtnStyle, // Reuse some styling
-             width: 'auto',       // Adjust width
-             height: 'auto',      // Adjust height
-             padding: '8px 15px',
-             backgroundColor: '#007bff', // A different color for manual search
-             flexShrink: 0        // Prevent button from shrinking too much
+            ...selPanelBtnStyle,
+            width: 'auto',
+            height: 'auto',
+            padding: '8px 15px',
+            backgroundColor: '#007bff',
+            flexShrink: 0
         });
-        $manualSearchBtn.on('click', async function(e) {
+
+        $manualInput.on('keydown', function (e) {
+            if (e.key === 'Enter') $manualSearchBtn.click();
+        });
+
+        $manualSearchBtn.on('click', async function (e) {
             e.stopPropagation();
             const manualTerm = $('#manualSearchInput').val().trim();
             if (!manualTerm) {
@@ -595,32 +614,34 @@ async function selectSeriesTitle(komgaSeriesId, $dom) {
             try {
                 await performSearchAndHandleResults(manualTerm, komgaSeriesId, $dom, searchType);
                 resolve();
-            } catch (searchError) {
-                 // Error message already shown
-                 reject(searchError);
+            } catch (err) {
+                reject(err);
             }
         });
+
         $manualInputContainer.append($manualInput).append($manualSearchBtn);
         $selTitlePanel.append($manualInputContainer);
-         // Add a general cancel button
-         const $cancelBtn = $('<button>取消搜索</button>').css({
-             ...selPanelBtnStyle,
-             gridColumn: '1 / -1', // Span all columns
-             marginTop: '10px',
-             backgroundColor: '#dc3545', // Red for cancel
-             height: 'auto', // Auto height
-             minHeight: '50px',
-             padding: '10px'
-         });
-         $cancelBtn.on('click', function(e) {
-             e.stopPropagation();
-             $selTitlePanel.remove();
-             showMessage('搜索已取消', 'warning');
-             reject('Title selection cancelled'); // Reject the promise
-         });
-         $selTitlePanel.append($cancelBtn);
+
+        const $cancelBtn = $('<button>取消搜索</button>').css({
+            ...selPanelBtnStyle,
+            gridColumn: '1 / -1',
+            marginTop: '10px',
+            backgroundColor: '#dc3545',
+            minHeight: '50px',
+            height: 'auto',
+            padding: '10px'
+        });
+
+        $cancelBtn.on('click', function (e) {
+            e.stopPropagation();
+            $selTitlePanel.remove();
+            showMessage('搜索已取消', 'warning');
+            reject('Title selection cancelled');
+        });
+
+        $selTitlePanel.append($cancelBtn);
         $selTitlePanel.appendTo('body');
-        setTimeout(() => $manualInput.focus(), 100); // Focus manual input
+        setTimeout(() => $manualInput.focus(), 100);
     });
 }
 //</editor-fold>
@@ -1711,7 +1732,7 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
             showMessage(`[批量] 系列 ${komgaSeriesId} 无有效标题用于匹配。`, 'error');
             matchResult.error = 'No valid title for matching';
         } else {
-            const searchTerm = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').trim());
+            const searchTerm = extractSeriesTitles(seriesName);
             if (!searchTerm) {
                 showMessage(`[批量]《${matchResult.name}》从"${seriesName}"解析搜索词失败。`, 'warning');
                 matchResult.error = 'No valid search term parsed from title';
@@ -1720,18 +1741,18 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
                 let seriesListRes = await fetchBookByName(searchTerm, searchType);
                 let preciseMatch = null;
                 let matchedField = null; // 'title', 'orititle', or 'alias'
-                const normalizedSearchTermForComparison = searchTerm.toLowerCase();
+                const normalizedSearchTermForComparison = searchTerm.replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase();
 
                 // 1. 尝试匹配 item.title (通常是 name_cn)
                 preciseMatch = seriesListRes.find(item =>
-                    item.title && t2s(String(item.title)).toLowerCase() === normalizedSearchTermForComparison
+                    item.title && extractSeriesTitles(String(item.title)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                 );
                 if (preciseMatch) {
                     matchedField = 'title (name_cn/name)';
                 } else {
                     // 2. 尝试匹配 item.orititle (通常是 name)
                     preciseMatch = seriesListRes.find(item =>
-                        item.orititle && t2s(String(item.orititle)).toLowerCase() === normalizedSearchTermForComparison
+                        item.orititle && extractSeriesTitles(String(item.orititle)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                     );
                     if (preciseMatch) {
                         matchedField = 'orititle (name)';
@@ -1741,7 +1762,7 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
                             if (item.aliases && typeof item.aliases === 'string' && item.aliases.trim() !== '') {
                                 const individualAliases = item.aliases.split(' / '); // 按 " / " 分割
                                 return individualAliases.some(alias =>
-                                    t2s(String(alias).trim()).toLowerCase() === normalizedSearchTermForComparison
+                                    extractSeriesTitles(String(alias)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                                 );
                             }
                             return false;
