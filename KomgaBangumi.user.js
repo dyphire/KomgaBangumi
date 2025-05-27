@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.3.0
+// @version      2.3.1
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1129,13 +1129,13 @@ async function addSeriesToManualMatchCollectionImmediately(seriesIdToAdd, series
 
 // ************************************* 第三方请求 (Bangumi API and bookof.moe) *************************************
 //<editor-fold desc="第三方请求">
-async function fetchBookByName(seriesName, source) {
+async function fetchBookByName(seriesName, source, limit = 8) {
   source = source ? source.toLowerCase() : 'btv'; // Default to btv (Bangumi API)
   try {
       switch (source) {
-        case 'btv': return await fetchBtvSubjectByNameAPI(seriesName);
-        case 'bof': return await fetchMoeBookByName(seriesName); // Stays as is (scraping)
-        default:    return await fetchBtvSubjectByNameAPI(seriesName);
+        case 'btv': return await fetchBtvSubjectByNameAPI(seriesName, limit);
+        case 'bof': return await fetchMoeBookByName(seriesName, limit); // Stays as is (scraping)
+        default:    return await fetchBtvSubjectByNameAPI(seriesName, limit);
       }
   } catch (error) {
       console.error(`[fetchBookByName] Error searching "${seriesName}" on ${source}:`, error);
@@ -1183,8 +1183,8 @@ function parseInfobox(infoboxArray, targetKey) {
     return null;
 }
 
-async function fetchBtvSubjectByNameAPI(seriesName) {
-    const searchUrl = `${btvApiUrl}/v0/search/subjects`;
+async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
+    const searchUrl = `${btvApiUrl}/v0/search/subjects?limit=20`;
     const requestBody = {
       keyword: seriesName,
       sort: "match",
@@ -1211,7 +1211,7 @@ async function fetchBtvSubjectByNameAPI(seriesName) {
           return [];
       }
 
-      const resArr = filteredData.map(item => {
+      const results = filteredData.map(item => {
           let authorName = "未知作者";
           let aliasesString = ""; // 用于存储处理后的别名字符串
 
@@ -1249,7 +1249,7 @@ async function fetchBtvSubjectByNameAPI(seriesName) {
           };
       });
 
-      return resArr.length > 8 ? resArr.slice(0, 8) : resArr; // Limit results if too many
+      return (typeof limit === 'number' && limit > 0) ? results.slice(0, limit) : results; // Limit results if too many
 
     } catch (error) {
         // asyncReq already shows a message and logs the error
@@ -1442,7 +1442,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     }
 }
 
-async function fetchMoeBookByName(seriesName) {
+async function fetchMoeBookByName(seriesName, limit = 8) {
   // This function remains unchanged as it's for bookof.moe (scraping)
   const moeSeriesName = s2t(seriesName); // Convert to traditional for BoF search
   const searchUrl = `${bofUrl}/data_list.php?s=${encodeURIComponent(moeSeriesName)}&p=1`; // Search on page 1
@@ -1469,7 +1469,7 @@ async function fetchMoeBookByName(seriesName) {
               }
           }
       });
-      return results.length > 8 ? results.slice(0, 8) : results;
+      return (typeof limit === 'number' && limit > 0) ? results.slice(0, limit) : results;
   } catch (error) {
       console.error(`[fetchMoeBookByName] Failed for "${seriesName}":`, error);
       // showMessage handled by caller
@@ -1738,7 +1738,7 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
                 matchResult.error = 'No valid search term parsed from title';
             } else {
                 // seriesListRes: [{ id, title, orititle, author, cover, aliases }, ...]
-                let seriesListRes = await fetchBookByName(searchTerm, searchType);
+                let seriesListRes = await fetchBookByName(searchTerm, searchType, 0);
                 let preciseMatch = null;
                 let matchedField = null; // 'title', 'orititle', or 'alias'
                 const normalizedSearchTermForComparison = searchTerm.replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase();
