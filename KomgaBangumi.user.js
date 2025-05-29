@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.4.0
+// @version      2.4.5
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -524,7 +524,14 @@ function extractSeriesTitles(seriesName, limitToFirst = true) {
         t2s(t.split(/[ （(_~]/)[0].trim())
     );
 
-    const minimalProcessedTitle = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').replace(/[（()）]/g, ' ').trim());
+    const minimalProcessedTitle = t2s(seriesName
+            .replace(/\[.*?\]/g, '')
+            .replace(/【.*?】/g, '')
+            .replace(/[（()）]/g, ' ')
+            .replace(/[\(\[【（]?单行本[\)\]】）]?\s*$/g, '')
+            .replace(/[\(\[【（]?\d+卷[\)\]】）]?\s*$/g, '')
+            .replace(/[_-]?\s*$/g, '')
+            .trim());
     const finalTitles = [...new Set(
         cleanedTitles
             .map(t => t.replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim())
@@ -788,6 +795,31 @@ function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = '
         });
     });
 }
+
+async function asyncPool(items, asyncFn, limit = 5) {
+    const ret = [];
+    const executing = new Set();
+
+    for (const item of items) {
+        // 调用异步函数，得到 Promise
+        const p = Promise.resolve().then(() => asyncFn(item));
+        ret.push(p);
+
+        // 添加到执行中集合
+        executing.add(p);
+
+        // 当执行中任务达到最大并发数，等待最先完成的一个
+        if (executing.size >= limit) {
+            await Promise.race(executing);
+        }
+
+        // 一旦 Promise 完成，从执行集合移除
+        p.finally(() => executing.delete(p));
+    }
+
+    // 等待剩余所有任务完成
+    return Promise.all(ret);
+}
 //</editor-fold>
 
 //<editor-fold desc="API封装-系列">
@@ -1047,11 +1079,12 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
 
     for (let i = 0; i < booksToProcess.length; i++) {
         const book = booksToProcess[i];
+        const bookname = book.name ?? '';
         const booktitle = book.metadata?.title ?? '';
         let volNum = 0;
 
         // 用正则提取卷号数字
-        const match = booktitle.match(volumeTitlePattern);
+        const match = booktitle.match(volumeTitlePattern) || bookname.match(volumeTitlePattern);
         if (match?.groups?.volNum) {
             const volStr = match.groups.volNum;
             volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : chineseToArabic(volStr);
@@ -1067,7 +1100,7 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
             if (bookUpdateNeeded) {
                 const bookMeta = {
                     authors: bookAuthors,
-                    title: volumeTitlePattern.test(booktitle) ? `卷 ${bookNumberForDisplay}` : undefined,
+                    title: (volumeTitlePattern.test(booktitle) || volumeTitlePattern.test(bookname)) ? `卷 ${bookNumberForDisplay}` : undefined,
                 };
 
                 if (mate) {
@@ -1366,7 +1399,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
     };
 
-    seriesMeta.title = btvData.name_cn || btvData.name;
+    seriesMeta.title = t2s(btvData.name_cn) || btvData.name;
     seriesMeta.titleSort = seriesMeta.title;
     if (btvData.name && btvData.name !== seriesMeta.title) { // If original name differs from CN name
         seriesMeta.alternateTitles.push({ label: '原名', title: capitalize(btvData.name) });
@@ -1498,51 +1531,63 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         });
 
     // 获取 volumeMates
-    const volumeMates = [];
-    let bookVolumeCoverSets = []; // [{ coverUrls: [urlL, urlM, ...] }, ...]
-    for (const vol of volumes) {
+    const volumeMatesFetcher = async (vol) => {
         const volCoverUrlsList = [];
-        if (vol.images) { // Standard image object with sizes
+        if (vol.images) {
             if (vol.images.large) volCoverUrlsList.push(vol.images.large);
             if (vol.images.medium) volCoverUrlsList.push(vol.images.medium);
             if (vol.images.common) volCoverUrlsList.push(vol.images.common);
         }
-        // Some related items might just have a top-level 'image' field (less common for subjects, more for EPs)
         if (vol.image && !volCoverUrlsList.includes(vol.image)) {
-             volCoverUrlsList.unshift(vol.image); // Put it at the beginning if it exists and is new
+            volCoverUrlsList.unshift(vol.image);
         }
-        const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))]; // Remove duplicates and nulls
-        if (uniqueVolCoverUrls.length > 0) {
-             bookVolumeCoverSets.push({ coverUrls: uniqueVolCoverUrls });
-        } else {
-             // If this volume has no covers, push an empty set to maintain order for Komga books
-             // updateKomgaBookCover will skip if urls are empty
-             bookVolumeCoverSets.push({ coverUrls: [] });
-        }
-
+        const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))];
+    
         let num = null, summary = '', releaseDate = '', isbn = '';
-        try {
-            const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
-            const volDetail = JSON.parse(volDetailStr);
-            const match = (volDetail.name_cn || volDetail.name).match(/\((\d+)\)$/);
-            num = match ? parseInt(match[1], 10) : null;
-            summary = (volDetail.summary || '')
-              .replace(/\r\n|\r/g, '\n')        // 统一换行
-              .split('\n')
-              .map(line => line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''))  // 去除每行前后空格（含全角空格）
-              .join('\n')
-              .trim();
-
-            const dateStr = parseInfobox(volDetail.infobox || [], '发售日');
-            if (dateStr) releaseDate = dateStr;
-
-            const isbnVal = parseInfobox(volDetail.infobox || [], 'ISBN');
-            if (isbnVal) isbn = isbnVal;
-        } catch (e) {
-            console.warn(`[BtvAPI] 获取单行本详情失败 (${vol.id}):`, e);
+    
+        if (updateAuthorsFlag) {
+            try {
+                const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
+                const volDetail = JSON.parse(volDetailStr);
+    
+                const match = (volDetail.name_cn || volDetail.name).match(/\((\d+)\)$/);
+                num = match ? parseInt(match[1], 10) : null;
+    
+                summary = (volDetail.summary || '')
+                    .replace(/\r\n|\r/g, '\n')
+                    .split('\n')
+                    .map(line => line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''))
+                    .join('\n')
+                    .trim();
+    
+                const dateStr = parseInfobox(volDetail.infobox || [], '发售日');
+                if (dateStr) {
+                    if (/^\d{4}-\d{2}$/.test(dateStr)) {
+                        releaseDate = `${dateStr}-01`;
+                    } else {
+                        releaseDate = dateStr;
+                    }
+                }
+    
+                const isbnVal = parseInfobox(volDetail.infobox || [], 'ISBN');
+                if (isbnVal) isbn = isbnVal;
+            } catch (e) {
+                console.warn(`[BtvAPI] 获取单行本详情失败 (${vol.id}):`, e);
+            }
         }
-        volumeMates.push({ num, summary, releaseDate, isbn });
-    }
+    
+        return {
+            num,
+            summary,
+            releaseDate,
+            isbn,
+            coverUrls: uniqueVolCoverUrls,
+        };
+    };
+    
+    const volumeMatesWithCovers = await asyncPool(volumes, volumeMatesFetcher, 10);
+    const bookVolumeCoverSets = volumeMatesWithCovers.map(v => ({ coverUrls: v.coverUrls }));
+    const volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
 
     // --- 更新系列封面 ---
     if (fetchSeriesType === 'all') {
