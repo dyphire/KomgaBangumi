@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.3.1
+// @version      2.3.2
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -527,7 +527,7 @@ function extractSeriesTitles(seriesName, limitToFirst = true) {
     const minimalProcessedTitle = t2s(seriesName.replace(/\[.*?\]/g, '').replace(/【.*?】/g, '').replace(/[（()）]/g, ' ').trim());
     const finalTitles = [...new Set(
         cleanedTitles
-            .map(t => t.replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim())
+            .map(t => t.replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim())
             .filter(Boolean)
     )];
 
@@ -978,6 +978,52 @@ async function updateKomgaBookMeta(book, komgaSeriesName, bookMeta) {
     }
 }
 
+function chineseToArabic(chineseNum) {
+    const cnNums = {
+        '零': 0, '〇': 0,
+        '一': 1, '二': 2, '两': 2, '俩': 2,
+        '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8,
+        '九': 9,
+    };
+    const cnUnits = {
+        '十': 10,
+        '百': 100,
+        '千': 1000,
+    };
+
+    let result = 0;
+    let unit = 1;     // 当前单位，默认是个位
+    let section = 0;  // 当前节的累加结果
+    let number = 0;   // 当前数字
+    let str = chineseNum.split('');
+
+    for (let i = str.length - 1; i >= 0; i--) {
+        const char = str[i];
+        if (cnUnits[char]) {
+            unit = cnUnits[char];
+            // 如果前面没有数字，比如“十二”，默认前面是1
+            if (number === 0) {
+                number = 1;
+            }
+            section += number * unit;
+            number = 0;
+            unit = 1;
+        } else if (cnNums.hasOwnProperty(char)) {
+            number = cnNums[char];
+            if (i === 0) {
+                // 如果是首字符是数字，要乘上当前单位
+                section += number * unit;
+            }
+        } else {
+            return NaN; // 非法字符
+        }
+    }
+
+    result += section;
+    return result;
+}
+
 async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolumeCoverSets) {
     // bookVolumeCoverSets 现在是这样的结构: [{ coverUrls: [urlL, urlM, urlC] }, { coverUrls: [...] }, ...]
     // 或者是一个空数组 [] (如果没有封面信息或仅更新作者)
@@ -993,16 +1039,38 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
                             bookVolumeCoverSets.some(set => set && set.coverUrls && set.coverUrls.length > 0);
 
     if (!bookUpdateNeeded && !coverUpdateNeeded) return;
+    
+    const volumeTitlePattern = /^(?!\s*vol(?:ume)?s?)[\s\S]*?(?:vol(?:ume)?s?|巻|卷|册|第)[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册)?/i;
 
     for (let i = 0; i < booksToProcess.length; i++) {
         const book = booksToProcess[i];
-        const bookNumberForDisplay = (book.metadata?.numberSort ?? book.metadata?.number ?? (i + 1)).toString().padStart(2, '0'); // Prefer numberSort
+        const booktitle = book.metadata?.title ?? '';
+        // 用正则提取卷号数字
+        let volNum = 0;
+        const match = booktitle.match(volumeTitlePattern);
+        if (match && match.groups && match.groups.volNum) {
+            const volStr = match.groups.volNum;
+            if (/^\d+$/.test(volStr)) {
+                volNum = parseInt(volStr, 10);
+            } else {
+                volNum = chineseToArabic(volStr);
+            }
+        }
+
+        if (!volNum) {
+            volNum = book.metadata?.numberSort ?? book.metadata?.number ?? (i + 1);
+        }
+        const bookNumberForDisplay = volNum.toString().padStart(2, '0');
+
         try {
             if (bookUpdateNeeded) {
                 let bookMeta = {
-                    title: `卷 ${bookNumberForDisplay}`, // Use the same number for display
                     authors: bookAuthors,
                 };
+                if (volumeTitlePattern.test(booktitle)) {
+                    bookMeta.title = `卷 ${bookNumberForDisplay}`;
+                }
+
                 await updateKomgaBookMeta(book, seriesName, bookMeta);
             }
             if (coverUpdateNeeded && bookVolumeCoverSets.length > i && bookVolumeCoverSets[i] && bookVolumeCoverSets[i].coverUrls && bookVolumeCoverSets[i].coverUrls.length > 0) {
@@ -1032,7 +1100,7 @@ function ifUpdateBookAuthors(seriesBooks, bookAuthors) {
     if (lastBookTitle.toLowerCase().includes('.zip') || lastBookTitle.toLowerCase().includes('.cbz')) return true;
     // If title looks like "Vol XX" or "卷 XX", it might be okay, but we still might want to ensure authors are set.
     // If it does NOT look like a standard volume title, it's probably a filename, so update.
-    if (!/^vol(ume)?\s*\d+/i.test(lastBookTitle) && !/^卷\s*\d+/i.test(lastBookTitle)) return true;
+    if (!/^vol(ume)?s?\s*\d+/i.test(lastBookTitle) && !/^(?:巻|卷|册|第)\s*\d+/i.test(lastBookTitle)) return true;
     // If Komga authors for the last book are empty, update
     const lastBookKomgaAuthors = lastBookMeta.authors || [];
     if (lastBookKomgaAuthors.length === 0) return true;
@@ -1741,18 +1809,18 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
                 let seriesListRes = await fetchBookByName(searchTerm, searchType, 0);
                 let preciseMatch = null;
                 let matchedField = null; // 'title', 'orititle', or 'alias'
-                const normalizedSearchTermForComparison = searchTerm.replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase();
+                const normalizedSearchTermForComparison = searchTerm.replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase();
 
                 // 1. 尝试匹配 item.title (通常是 name_cn)
                 preciseMatch = seriesListRes.find(item =>
-                    item.title && extractSeriesTitles(String(item.title)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
+                    item.title && extractSeriesTitles(String(item.title)).replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                 );
                 if (preciseMatch) {
                     matchedField = 'title (name_cn/name)';
                 } else {
                     // 2. 尝试匹配 item.orititle (通常是 name)
                     preciseMatch = seriesListRes.find(item =>
-                        item.orititle && extractSeriesTitles(String(item.orititle)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
+                        item.orititle && extractSeriesTitles(String(item.orititle)).replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                     );
                     if (preciseMatch) {
                         matchedField = 'orititle (name)';
@@ -1762,7 +1830,7 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
                             if (item.aliases && typeof item.aliases === 'string' && item.aliases.trim() !== '') {
                                 const individualAliases = item.aliases.split(' / '); // 按 " / " 分割
                                 return individualAliases.some(alias =>
-                                    extractSeriesTitles(String(alias)).replace(/[:：,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
+                                    extractSeriesTitles(String(alias)).replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase() === normalizedSearchTermForComparison
                                 );
                             }
                             return false;
