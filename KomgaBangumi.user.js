@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.4.6
+// @version      2.4.7
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1055,7 +1055,7 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
 
     if (!bookUpdateNeeded && !coverUpdateNeeded) return;
 
-    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|第)[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册)?/i;
+    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊|第)(?!.*(?:话|話|章|节|節|集|页|頁|部))[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册|冊)?/i;
 
     for (let i = 0; i < booksToProcess.length; i++) {
         const book = booksToProcess[i];
