@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.4.7
+// @version      2.4.8
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1119,6 +1119,31 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
     }
 }
 
+function ifUpdateBookVol(seriesBooks) {
+    if (!seriesBooks || !seriesBooks.content || seriesBooks.content.length === 0) return false;
+
+    const books = seriesBooks.content;
+    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊|第)(?!.*(?:话|話|章|节|節|集|页|頁|部))[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册|冊)?/i;
+
+    // 是否存在符合卷号命名的书籍
+    const hasValidVolumeTitle = books.some(book => {
+        const title = book?.metadata?.title || book?.name || "";
+        return volumeTitlePattern.test(title);
+    });
+
+    if (!hasValidVolumeTitle) return false;
+
+    // 只检查标题匹配卷号格式的书籍的相关字段是否完整
+    const needsUpdate = books.some(book => {
+        const title = book?.metadata?.title || book?.name || "";
+        if (!volumeTitlePattern.test(title)) return false;
+        const meta = book?.metadata;
+        return !meta || !meta.title || !meta.summary || !meta.releaseDate || !meta.isbn;
+    });
+
+    return needsUpdate;
+}
+
 function ifUpdateBook(seriesBooks, bookAuthors) {
     // This function decides if book authors should be updated.
     // It's a heuristic based on the format of the last book's title.
@@ -1524,6 +1549,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
     const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
     const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBook(seriesBooks, finalMeta.authors);
+    const updateVolumesFlag = ifUpdateBookVol(seriesBooks);
 
     // 过滤单行本卷，排序
     const relatedSubjectsApiUrl = `${btvApiUrl}/v0/subjects/${subjectId}/subjects`;
@@ -1560,7 +1586,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     
         let num = null, summary = '', releaseDate = '', isbn = '';
     
-        if (updateAuthorsFlag) {
+        if (updateAuthorsFlag && updateVolumesFlag) {
             try {
                 const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
                 const volDetail = JSON.parse(volDetailStr);
