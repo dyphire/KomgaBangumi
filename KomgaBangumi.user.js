@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.4.8
+// @version      2.4.9
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1556,14 +1556,10 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const relatedSubjectsStr = await asyncReq(relatedSubjectsApiUrl, 'GET', undefined, {});
     const relatedSubjects = JSON.parse(relatedSubjectsStr);
     const volumes = relatedSubjects
-        .filter(rel =>
-            rel.relation === "单行本" ||
-            (rel.name && /\(\d+\)$/.test(rel.name)) ||
-            (rel.name_cn && /\(\d+\)$/.test(rel.name_cn))
-        )
+        .filter(rel => rel.relation === "单行本")
         .sort((a, b) => {
-            const numA_match = (a.name_cn || a.name).match(/\((\d+)\)$/);
-            const numB_match = (b.name_cn || b.name).match(/\((\d+)\)$/);
+            const numA_match = (a.name_cn || a.name).match(/\((\d+)\)/);
+            const numB_match = (b.name_cn || b.name).match(/\((\d+)\)/);
             const numA = numA_match ? parseInt(numA_match[1], 10) : null;
             const numB = numB_match ? parseInt(numB_match[1], 10) : null;
 
@@ -1591,7 +1587,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
                 const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
                 const volDetail = JSON.parse(volDetailStr);
     
-                const match = (volDetail.name_cn || volDetail.name).match(/\((\d+)\)$/);
+                const match = (volDetail.name_cn || volDetail.name).match(/\((\d+)\)/);
                 num = match ? parseInt(match[1], 10) : null;
     
                 summary = (volDetail.summary || '')
