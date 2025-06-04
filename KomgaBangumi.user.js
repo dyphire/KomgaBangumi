@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.4.9
+// @version      2.5.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1580,15 +1580,17 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
         const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))];
     
-        let num = null, summary = '', releaseDate = '', isbn = '';
+        let num = null;
+        {
+            const match = (vol.name_cn || vol.name)?.match(/\((\d+)\)/);
+            if (match) num = parseInt(match[1], 10);
+        }
     
+        let summary = '', releaseDate = '', isbn = '';
         if (updateAuthorsFlag && updateVolumesFlag) {
             try {
                 const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
                 const volDetail = JSON.parse(volDetailStr);
-    
-                const match = (volDetail.name_cn || volDetail.name).match(/\((\d+)\)/);
-                num = match ? parseInt(match[1], 10) : null;
     
                 summary = (volDetail.summary || '')
                     .replace(/\r\n|\r/g, '\n')
