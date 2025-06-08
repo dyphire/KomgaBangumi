@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.5.1
+// @version      2.5.2
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1459,16 +1459,39 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     seriesMeta.totalBookCount = btvData.volumes || btvData.eps || btvData.total_episodes || null;
 
     if (btvData.tags && btvData.tags.length > 0) {
-        const rawApiTags = btvData.tags.map(t => ({ name: t.name, count: t.count }));
-        const maxTagCount = Math.max(1, ...rawApiTags.map(tag => tag.count)); // Avoid -Infinity if no tags
-        let thresholdTagCount = 3; // Default threshold
-             if (maxTagCount > 200) thresholdTagCount = 35; else if (maxTagCount > 125) thresholdTagCount = 25;
-        else if (maxTagCount > 60)  thresholdTagCount = 15; else if (maxTagCount > 30)  thresholdTagCount = 10;
-        else if (maxTagCount > 10)  thresholdTagCount = 5;
+        const rawApiTags = btvData.tags
+            .map(t => ({ name: t.name, count: t.count }))
+            .filter(tag => tagLabels.includes(tag.name + ','));
+    
+        if (rawApiTags.length > 0) {
+            let validTags = rawApiTags
+                .filter(tag => tagLabels.includes(tag.name + ","))
+                .sort((a, b) => b.count - a.count);
+            const maxTagCount = Math.max(1, ...validTags.map(tag => tag.count));
+    
+            let thresholdTagCount = 3;
+            if (maxTagCount > 200) {
+                thresholdTagCount = 35;
+            } else if (maxTagCount > 125) {
+                thresholdTagCount = 25;
+            } else if (maxTagCount > 60) {
+                thresholdTagCount = 15;
+            } else if (maxTagCount > 30) {
+                thresholdTagCount = 10;
+            } else if (maxTagCount > 10) {
+                thresholdTagCount = 5;
+            }
 
-        seriesMeta.tags = rawApiTags
-            .filter(tag => tag.count >= thresholdTagCount && tagLabels.includes(tag.name + ',')) // Filter by count and predefined list
-            .map(tag => tag.name);
+            let finalTags = validTags.filter(tag => tag.count >= thresholdTagCount);
+
+            if (finalTags.length < 10) {
+                finalTags = validTags.slice(0, 10);
+            }
+
+            seriesMeta.tags = finalTags.map(tag => tag.name);
+        } else {
+            seriesMeta.tags = [];
+        }
     }
 
     const infobox = btvData.infobox || [];
