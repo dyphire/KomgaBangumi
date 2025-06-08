@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.5.2
+// @version      2.5.3
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1094,7 +1094,7 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
 
             if (coverUpdateNeeded) {
                 let coverUrls = null;
-                if (volumeMates.length > 0 && volNumInt > 0) {
+                if (volumeMates.length > 0) {
                     // volumeMates 存在时，按匹配的卷号找对应封面
                     if (mate) {
                         const mateIndex = volumeMates.indexOf(mate);
