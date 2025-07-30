@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.5.5
+// @version      2.5.6
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1388,6 +1388,40 @@ function extractAliases(infoboxArray) {
     return Array.from(aliases).filter(a => a).join(" / ");
 }
 
+// 辅助函数：规范化日期字符串
+function normalizeDate(dateStr) {
+    if (!dateStr) return undefined;
+
+    dateStr = dateStr.trim();
+    let match;
+
+    match = dateStr.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+    if (match) {
+        const [, y, m, d] = match;
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    match = dateStr.match(/^(\d{4})年(\d{1,2})月$/);
+    if (match) {
+        const [, y, m] = match;
+        return `${y}-${m.padStart(2, '0')}-01`;
+    }
+
+    match = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (match) {
+        const [, y, m, d] = match;
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    match = dateStr.match(/^(\d{4})-(\d{1,2})$/);
+    if (match) {
+        const [, y, m] = match;
+        return `${y}-${m.padStart(2, '0')}-01`;
+    }
+
+    return undefined;
+}
+
 async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
     const searchUrl = `${btvApiUrl}/v0/search/subjects?limit=20`;
     const requestBody = {
@@ -1648,13 +1682,9 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
                     .join('\n')
                     .trim();
     
-                const dateStr = parseInfobox(volDetail.infobox || [], '发售日');
+                const dateStr = parseInfobox(volDetail.infobox || [], '发售日') || parseInfobox(volDetail.infobox || [], '放送开始');
                 if (dateStr) {
-                    if (/^\d{4}-\d{2}$/.test(dateStr)) {
-                        releaseDate = `${dateStr}-01`;
-                    } else {
-                        releaseDate = dateStr;
-                    }
+                    releaseDate = normalizeDate(dateStr);
                 }
     
                 const isbnVal = parseInfobox(volDetail.infobox || [], 'ISBN');
