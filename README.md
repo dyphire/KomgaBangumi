@@ -97,6 +97,10 @@ _命名建议修改自某喵_
 
 [Changelog](Changelog.md)
 
+## 相关项目
+
+- [KomgaMylar](https://github.com/dyphire/KomgaMylar)
+
 ## 许可证
 
 [MIT](LICENSE)
