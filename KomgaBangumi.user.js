@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.5.6
+// @version      2.5.7
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -875,18 +875,29 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
         return false;
     }
     await cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName);
-    let blob; // Declare blob outside the loop to have it in scope for 413 error reporting
+
+    let blob;
+    let validTried = false;
+
     for (let i = 0; i < orderedImageUrls.length; i++) {
         const imgUrl = orderedImageUrls[i];
         const imageSizeLabel = i === 0 ? "首选" : (i === 1 ? "中尺寸" : (i === 2 ? "通用尺寸" : "小尺寸"));
         try {
             showMessage(`《${komgaSeriesName}》尝试上传 ${imageSizeLabel} 系列封面...`, 'info', 2000);
             blob = await asyncReq(imgUrl, 'GET', undefined, {}, 'blob');
+
             if (!blob || blob.size === 0) {
                 console.warn(`[updateKomgaSeriesCover] 下载图片 ${imgUrl} 失败或为空 blob。`);
                 throw new Error("下载图片 blob 失败或为空");
             }
-            // console.log(`《${komgaSeriesName}》系列封面 ${imgUrl} (尺寸: ${imageSizeLabel}) 下载成功，大小: ${blob.size} bytes`);
+
+            if (blob.size < 60 * 1024) {
+                console.warn(`[updateKomgaSeriesCover] 跳过 ${imageSizeLabel} 封面，文件太小: ${blob.size} bytes`);
+                showMessage(`《${komgaSeriesName}》${imageSizeLabel} 封面太小(${(blob.size / 1024).toFixed(1)}kB)，跳过`, 'warning', 2000);
+                continue;
+            }
+
+            validTried = true;
             let updateSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
             const seriesCoverFormdata = new FormData();
             const fileName = `series_cover_${komgaSeriesId}.jpg`;
@@ -894,6 +905,7 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
             seriesCoverFormdata.append('file', seriesCoverFile);
             seriesCoverFormdata.append('selected', 'true');
             await asyncReq(updateSeriesCoverUrl, 'POST', seriesCoverFormdata);
+
             showMessage(`《${komgaSeriesName}》系列封面 (${imageSizeLabel}) 已更新`, 'success', 2500);
             return true;
         } catch (e) {
@@ -901,7 +913,7 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
             if (errorMessage.includes("HTTP Error 413")) {
                 console.warn(`[updateKomgaSeriesCover] 《${komgaSeriesName}》上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败 (413 Payload Too Large). 大小: ${blob ? blob.size + ' bytes' : '未知'}. 尝试下一个尺寸...`);
                 showMessage(`《${komgaSeriesName}》${imageSizeLabel} 封面过大(413)，尝试更小尺寸...`, 'warning', 3000);
-                if (i === orderedImageUrls.length - 1) {
+                if (i === orderedImageUrls.length - 1 && validTried) {
                     showMessage(`《${komgaSeriesName}》所有尺寸系列封面均因过大(413)上传失败。请检查服务器配置。`, 'error', 7000);
                 }
             } else {
@@ -911,7 +923,13 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
             }
         }
     }
-    console.error(`[updateKomgaSeriesCover] 《${komgaSeriesName}》所有尝试均未能成功上传系列封面。`);
+
+    if (!validTried) {
+        showMessage(`《${komgaSeriesName}》所有封面文件均小于 60kB，未上传封面`, 'error', 4000);
+    } else {
+        console.error(`[updateKomgaSeriesCover] 《${komgaSeriesName}》所有尝试均未能成功上传系列封面。`);
+    }
+
     return false;
 }
 
@@ -947,17 +965,28 @@ async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
 //<editor-fold desc="API封装-话卷">
 async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay, orderedImageUrls) {
     if (!orderedImageUrls || orderedImageUrls.length === 0) {
-        // showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面URL列表为空，跳过`, 'warning', 1000);
         return false;
     }
-    let blob; // Declare blob outside the loop
+
+    let blob;
+    let validTried = false;
+
     for (let i = 0; i < orderedImageUrls.length; i++) {
         const imgUrl = orderedImageUrls[i];
         const imageSizeLabel = i === 0 ? "首选" : (i === 1 ? "中等" : (i === 2 ? "通用" : "较小"));
         try {
             showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 尝试上传 ${imageSizeLabel} 封面...`, 'info', 1500);
             blob = await asyncReq(imgUrl, 'GET', undefined, {}, 'blob');
-            if (!blob) throw new Error("下载图片 blob 失败");
+
+            if (!blob || blob.size === 0) throw new Error("下载图片 blob 失败");
+
+            if (blob.size < 60 * 1024) {
+                console.warn(`[updateKomgaBookCover] 跳过 ${imageSizeLabel} 封面，文件太小: ${blob.size} bytes`);
+                showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面太小(${(blob.size / 1024).toFixed(1)}kB)，跳过`, 'warning', 2000);
+                continue;
+            }
+
+            validTried = true;
             let updateBookCoverUrl = `${location.origin}/api/v1/books/${book.id}/thumbnails`;
             let bookCoverFormdata = new FormData();
             let bookCoverName = `vol_${bookNumberForDisplay}_cover.jpg`;
@@ -965,25 +994,32 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
             bookCoverFormdata.append('file', bookCoverFile);
             bookCoverFormdata.append('selected', 'true');
             await asyncReq(updateBookCoverUrl, 'POST', bookCoverFormdata);
+
             showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面 (${imageSizeLabel}版本) 已更新`, 'success', 1500);
-            return true; // 上传成功
+            return true;
         } catch (e) {
             const errorMessage = e.message || String(e);
             if (errorMessage.includes("HTTP Error 413")) {
-                console.warn(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败 (413). 大小: ${blob ? blob.size + ' bytes' : '未知'}. 尝试下一个...`);
+                console.warn(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面失败 (413): 大小 ${blob ? blob.size + ' bytes' : '未知'}，尝试下一个`);
                 showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面过大(413)，尝试更小...`, 'warning', 2500);
-                 if (i === orderedImageUrls.length - 1) {
+                if (i === orderedImageUrls.length - 1 && validTried) {
                     showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有尺寸封面均因过大(413)上传失败。`, 'error', 6000);
                 }
             } else {
-                console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面 (${imgUrl}) 失败:`, e);
+                console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 上传 ${imageSizeLabel} 封面失败:`, e);
                 showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面 (${imageSizeLabel}版本) 更新失败: ${errorMessage}`, 'error', 5000);
-                return false; // 其他错误，停止尝试此书的封面
+                return false;
             }
         }
     }
-    console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有尝试均未能成功上传封面。`);
-    return false; // 未成功
+
+    if (!validTried) {
+        showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有封面均小于 60kB，未上传`, 'error', 4000);
+    } else {
+        console.error(`[updateKomgaBookCover] 《${komgaSeriesName}》卷 ${bookNumberForDisplay} 所有尝试均未能成功上传封面。`);
+    }
+
+    return false;
 }
 
 async function getKomgaSeriesBooks(komgaSeriesId) {
