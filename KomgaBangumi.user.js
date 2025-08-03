@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.5.7
+// @version      2.6.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -717,17 +717,17 @@ async function filterSeriesMeta(komgaSeriesId, seriesMeta) {
 
 // ************************************** API封装 **************************************
 //<editor-fold desc="基本请求封装">
-function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = 'text') {
+function asyncReq(url, method, data_ry = {}, headers = null, responseType = 'text') {
     return new Promise((resolve, reject) => {
         let requestHeaders = { ...headers }; // 从传入的 headers 开始
         let requestData = data_ry;
 
         if (data_ry instanceof FormData) {
             // 对于 FormData, Content-Type 由浏览器设置
-        } else if (send_type !== "GET" && typeof data_ry === 'object') {
+        } else if (method !== "GET" && typeof data_ry === 'object') {
             requestData = JSON.stringify(data_ry);
             requestHeaders = { ...defaultReqHeaders, ...requestHeaders }; // 与默认值合并，传入的 headers 优先
-        } else if (send_type === "GET") {
+        } else if (method === "GET") {
             requestData = undefined;
             // 对于 GET, 通常不需要 Content-Type
             delete requestHeaders['content-type']; // 确保 GET 请求没有默认的 content-type
@@ -748,12 +748,12 @@ function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = '
 
         let requestUrl = url;
         // 为 GET 请求添加缓存清除参数，除非是不喜欢它的API (例如外部API)
-        if (send_type === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl)) {
+        if (method === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl)) {
             requestUrl += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
         }
 
         GM_xmlhttpRequest({
-            method: send_type,
+            method: method,
             url: requestUrl,
             headers: requestHeaders,
             data: requestData,
@@ -763,7 +763,7 @@ function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = '
                 if (response.status >= 200 && response.status < 300) {
                     resolve(responseType === 'text' || responseType === 'json' ? response.responseText : response.response);
                 } else if (response.status === 401 && url.startsWith(btvApiUrl)) { // Bangumi API 认证失败
-                    console.error(`[asyncReq] Bangumi API 授权错误 (401): ${send_type} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
+                    console.error(`[asyncReq] Bangumi API 授权错误 (401): ${method} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
                     // 检查是否存在已配置的 Access Token
                     const currentToken = getBangumiAccessToken();
                     if (currentToken) {
@@ -782,19 +782,19 @@ function asyncReq(url, send_type, data_ry = {}, headers = null, responseType = '
                     reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unauthorized'}. Bangumi Access Token might be invalid or expired.`));
                 }
                 else {
-                    console.error(`[asyncReq] HTTP Error (${response.status}): ${send_type} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
-                    showMessage(`请求错误 (${response.status}): ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                    console.error(`[asyncReq] HTTP Error (${response.status}): ${method} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
+                    showMessage(`请求错误 (${response.status}): ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
                     reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unknown error'}`));
                 }
             },
             onerror: (error) => {
-                console.error(`[asyncReq] Network Error: ${send_type} ${requestUrl.substring(0,100)}...`, error);
-                showMessage(`网络请求失败: ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                console.error(`[asyncReq] Network Error: ${method} ${requestUrl.substring(0,100)}...`, error);
+                showMessage(`网络请求失败: ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
                 reject(new Error('Network request failed'));
             },
             ontimeout: () => {
-                console.error(`[asyncReq] Timeout: ${send_type} ${requestUrl.substring(0,100)}...`);
-                showMessage(`请求超时: ${send_type} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                console.error(`[asyncReq] Timeout: ${method} ${requestUrl.substring(0,100)}...`);
+                showMessage(`请求超时: ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
                 reject(new Error('Request timed out'));
             }
         });
@@ -828,6 +828,62 @@ async function asyncPool(items, asyncFn, limit = 5) {
 //</editor-fold>
 
 //<editor-fold desc="API封装-系列">
+async function getAllSeriesInLibrary(libraryId) {
+    const allSeries = [];
+    const pageSize = 2000;
+    let page = 0;
+
+    const url = `${location.origin}/api/v1/series/list`;
+
+    const payload = {
+        condition: {
+            allOf: [
+                {
+                    libraryId: {
+                        operator: "is",
+                        value: libraryId
+                    }
+                },
+                {
+                    deleted: {
+                        operator: "isFalse"
+                    }
+                }
+            ]
+        }
+    };
+
+    showMessage(`正在获取数据库 #${libraryId} 所有系列...`, 'info');
+
+    while (true) {
+        const params = new URLSearchParams({
+            page: String(page),
+            size: String(pageSize),
+            sort: "metadata.titleSort,asc"
+        });
+
+        try {
+            const respText = await asyncReq(`${url}?${params}`, 'POST', payload);
+            const data = JSON.parse(respText);
+            const content = data?.content || [];
+
+            allSeries.push(...content);
+
+            if (content.length < pageSize) break; // 最后一页
+            page++;
+
+            showMessage(`已获取 ${allSeries.length} 条系列 (页 ${page})`, 'info', 2000);
+        } catch (e) {
+            console.error(`[getAllSeriesInLibrary] 获取库 ${libraryId} 的系列失败（第 ${page} 页）:`, e);
+            showMessage(`获取数据库 #${libraryId} 系列失败: ${e.message || e}`, 'error', 10000);
+            break;
+        }
+    }
+
+    showMessage(`数据库 #${libraryId} 系列列表获取完毕，共 ${allSeries.length} 个`, 'success');
+    return allSeries;
+}
+
 async function getKomgaSeriesData(komgaSeriesId) {
     const seriesUrl = `${location.origin}/api/v1/series/${komgaSeriesId}`;
     try {
@@ -866,6 +922,17 @@ async function updateKomgaSeriesMeta(komgaSeriesId, komgaSeriesName, komgaSeries
     } catch (e) {
         console.error(`[updateKomgaSeriesMeta] Failed for ${komgaSeriesName}:`, e);
         showMessage(`《${komgaSeriesName}》系列信息更新失败`, 'error', 5000);
+    }
+}
+
+async function getKomgaSeriesCovers(komgaSeriesId) {
+    let allSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
+    try {
+        const coversStr = await asyncReq(allSeriesCoverUrl, 'GET');
+        return JSON.parse(coversStr);
+    } catch (e) {
+        console.error(`[getKomgaSeriesCovers] Failed for ID ${komgaSeriesId}:`, e);
+        return []; // Return empty array on error
     }
 }
 
@@ -933,17 +1000,6 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
     return false;
 }
 
-async function getKomgaSeriesCovers(komgaSeriesId) {
-    let allSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
-    try {
-        const coversStr = await asyncReq(allSeriesCoverUrl, 'GET');
-        return JSON.parse(coversStr);
-    } catch (e) {
-        console.error(`[getKomgaSeriesCovers] Failed for ID ${komgaSeriesId}:`, e);
-        return []; // Return empty array on error
-    }
-}
-
 async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
     const thumbs = await getKomgaSeriesCovers(komgaSeriesId);
     // Filter for thumbnails that are USER_UPLOADED and NOT currently selected
@@ -963,6 +1019,74 @@ async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
 //</editor-fold>
 
 //<editor-fold desc="API封装-话卷">
+async function getKomgaSeriesBooks(komgaSeriesId) {
+    const url = `${location.origin}/api/v1/books/list`;
+    const pageSize = 1000;
+    let page = 0;
+    let allBooks = [];
+
+    const payload = {
+        condition: {
+            allOf: [
+                {
+                    seriesId: {
+                        operator: "is",
+                        value: String(komgaSeriesId)
+                    }
+                },
+                {
+                    deleted: {
+                        operator: "isFalse"
+                    }
+                }
+            ]
+        }
+    };
+
+    while (true) {
+        const params = new URLSearchParams({
+            page: String(page),
+            size: String(pageSize),
+            sort: "metadata.numberSort,asc"
+        });
+
+        try {
+            const resText = await asyncReq(`${url}?${params.toString()}`, 'POST', payload);
+            const data = JSON.parse(resText);
+            const content = data?.content || [];
+
+            allBooks.push(...content);
+
+            if (content.length < pageSize) break; // 最后一页
+            page++;
+        } catch (e) {
+            console.error(`[getKomgaSeriesBooks] 获取系列 ${komgaSeriesId} 第 ${page} 页失败:`, e);
+            showMessage(`获取系列 ${komgaSeriesId} 的书籍失败（第 ${page} 页）`, 'error');
+            break;
+        }
+    }
+
+    return {
+        content: allBooks,
+        numberOfElements: allBooks.length
+    };
+}
+
+async function updateKomgaBookMeta(book, komgaSeriesName, bookMeta) {
+    // Filter out null or empty string values before sending
+    const cleanMeta = Object.fromEntries(Object.entries(bookMeta).filter(([_, v]) => v !== null && v !== ''));
+    if (Object.keys(cleanMeta).length === 0) {
+        return; // No actual metadata to update
+    }
+    try {
+        await asyncReq(`${location.origin}/api/v1/books/${book.id}/metadata`, 'PATCH', cleanMeta);
+        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息已更新`, 'success', 1000);
+    } catch (e) {
+        console.error(`[updateKomgaBookMeta] Failed for ${komgaSeriesName} Vol ${book.number}:`, e);
+        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息更新失败`, 'error', 5000);
+    }
+}
+
 async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay, orderedImageUrls) {
     if (!orderedImageUrls || orderedImageUrls.length === 0) {
         return false;
@@ -1022,35 +1146,6 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
     return false;
 }
 
-async function getKomgaSeriesBooks(komgaSeriesId) {
-    let seriesBookUrl =
-        `${location.origin}/api/v1/series/${komgaSeriesId}` +
-        `/books?page=0&size=${maxReqBooks}&sort=metadata.numberSort%2Casc`; // Fetch all books up to maxReqBooks
-    try {
-        const seriesBookRes = await asyncReq(seriesBookUrl, 'GET');
-        return JSON.parse(seriesBookRes);
-    } catch (e) {
-        console.error(`[getKomgaSeriesBooks] Failed for ID ${komgaSeriesId}:`, e);
-        showMessage(`获取系列 ${komgaSeriesId} 书籍列表失败`, 'error');
-        return { content: [], numberOfElements: 0 }; // Return empty structure on error
-    }
-}
-
-async function updateKomgaBookMeta(book, komgaSeriesName, bookMeta) {
-    // Filter out null or empty string values before sending
-    const cleanMeta = Object.fromEntries(Object.entries(bookMeta).filter(([_, v]) => v !== null && v !== ''));
-    if (Object.keys(cleanMeta).length === 0) {
-        return; // No actual metadata to update
-    }
-    try {
-        await asyncReq(`${location.origin}/api/v1/books/${book.id}/metadata`, 'PATCH', cleanMeta);
-        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息已更新`, 'success', 1000);
-    } catch (e) {
-        console.error(`[updateKomgaBookMeta] Failed for ${komgaSeriesName} Vol ${book.number}:`, e);
-        showMessage(`《${komgaSeriesName}》第 ${book.number} 卷信息更新失败`, 'error', 5000);
-    }
-}
-
 function chineseToArabic(chineseNum) {
     const cnNums = {
         '零': 0, '〇': 0,
@@ -1108,7 +1203,7 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
     }
 
     const booksToProcess = seriesBooks.content || [];
-    const bookUpdateNeeded = bookAuthors?.length > 0;
+    const bookUpdateNeeded = bookAuthors?.length > 0 || volumeMates.length > 0;
 
     const coverUpdateNeeded = bookVolumeCoverSets &&
                              bookVolumeCoverSets.length > 0 &&
@@ -1125,7 +1220,7 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
         let volNum = 0;
 
         // 用正则提取卷号数字
-        const match = booktitle.match(volumeTitlePattern) || bookname.match(volumeTitlePattern);
+        const match = bookname.match(volumeTitlePattern) || booktitle.match(volumeTitlePattern);
         if (match?.groups?.volNum) {
             const volStr = match.groups.volNum;
             volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : chineseToArabic(volStr);
@@ -1141,7 +1236,8 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
             if (bookUpdateNeeded) {
                 const bookMeta = {
                     authors: bookAuthors,
-                    title: (volumeTitlePattern.test(booktitle) || volumeTitlePattern.test(bookname)) ? `卷 ${bookNumberForDisplay}` : undefined,
+                    title: (volumeTitlePattern.test(bookname) || volumeTitlePattern.test(booktitle)) ? `卷 ${bookNumberForDisplay}` : undefined,
+                    number: (volumeTitlePattern.test(bookname) || volumeTitlePattern.test(booktitle)) ? bookNumberForDisplay : undefined,
                 };
 
                 if (mate) {
@@ -1458,6 +1554,26 @@ function normalizeDate(dateStr) {
     return undefined;
 }
 
+function extractVolumeNumber(name) {
+    if (!name) return null;
+
+    let match = name.match(/Vol[.\s](\d{1,4})$/);
+    if (match) return parseInt(match[1], 10);
+
+    match = name.match(/\((\d+)\)$/);
+    if (match) return parseInt(match[1], 10);
+
+    match = name.match(/\s(\d{1,4})$/);
+    if (match) return parseInt(match[1], 10);
+
+    match = name.match(/第(\d{1,4})卷$/);
+    if (match) {
+        return parseInt(match[1], 10);
+    }
+
+    return null;
+}
+
 async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
     const searchUrl = `${btvApiUrl}/v0/search/subjects?limit=20`;
     const requestBody = {
@@ -1539,7 +1655,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
     };
 
-    seriesMeta.title = btvData.name_cn && t2s(btvData.name_cn) || btvData.name;
+    seriesMeta.title = btvData.name_cn && t2s(btvData.name_cn) || t2s(btvData.name);
     seriesMeta.titleSort = seriesMeta.title;
     if (btvData.name && btvData.name !== seriesMeta.title) { // If original name differs from CN name
         seriesMeta.alternateTitles.push({ label: '原名', title: capitalize(btvData.name) });
@@ -1600,8 +1716,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     // Define author roles mapping for Komga
     const authorRoles = {
-        '作者': 'writer', '原作': 'writer', '漫画家': 'writer', '作画': 'penciller',
-        '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
+        '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '漫画家': 'writer', 
+        '作画': 'penciller', '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
         '原案': 'story', '脚本': 'scriptwriter', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
         // Add more roles as needed and map them to Komga's supported roles
     };
@@ -1617,6 +1733,17 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
             });
         }
     }
+    const hasWriter = resAuthors.some(a => a.role === 'writer');
+    if (!hasWriter) {
+        const pencillers = resAuthors.filter(a => a.role === 'penciller');
+        for (const p of pencillers) {
+            const alreadyAdded = resAuthors.some(a => a.name === p.name && a.role === 'writer');
+            if (!alreadyAdded) {
+                resAuthors.push({ name: p.name, role: 'writer' });
+            }
+        }
+    }
+
     seriesMeta.authors = resAuthors;
 
     // Extract aliases from infobox ("别名")
@@ -1677,10 +1804,10 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const volumes = relatedSubjects
         .filter(rel => rel.relation === "单行本")
         .sort((a, b) => {
-            const numA_match = (a.name_cn || a.name).match(/\((\d+)\)/);
-            const numB_match = (b.name_cn || b.name).match(/\((\d+)\)/);
-            const numA = numA_match ? parseInt(numA_match[1], 10) : null;
-            const numB = numB_match ? parseInt(numB_match[1], 10) : null;
+            const nameA = a.name_cn || a.name;
+            const nameB = b.name_cn || b.name;
+            const numA = extractVolumeNumber(nameA);
+            const numB = extractVolumeNumber(nameB);
 
             if (numA !== null && numB !== null && numA !== numB) return numA - numB;
             return a.id - b.id;
@@ -1699,14 +1826,10 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
         const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))];
     
-        let num = null;
-        {
-            const match = (vol.name_cn || vol.name)?.match(/\((\d+)\)/);
-            if (match) num = parseInt(match[1], 10);
-        }
+        let num = extractVolumeNumber(vol.name_cn || vol.name);
     
         let summary = '', releaseDate = '', isbn = '';
-        if (updateAuthorsFlag && updateVolumesFlag) {
+        if (updateVolumesFlag) {
             try {
                 const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
                 const volDetail = JSON.parse(volDetailStr);
@@ -1752,7 +1875,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
 
         await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bookVolumeCoverSets, volumeMates);
-    } else if (updateAuthorsFlag) { // 'meta' only sync, but authors need update
+    } else if (updateAuthorsFlag || updateVolumesFlag) { // 'meta' only sync, but authors need update
+        console.log(`[fetchBtvSubjectByUrlAPI] 更新系列 ${komgaSeriesId} 的作者或卷信息`);
         await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, [], volumeMates); // Pass empty cover sets
     }
 }
@@ -2126,42 +2250,6 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
 
     if ($domForLoading) partLoadingEnd($domForLoading);
     return matchResult;
-}
-
-async function getAllSeriesInLibrary(libraryId) {
-    let allSeries = [], page = 0, totalPages = 1;
-    showMessage(`正在获取数据库 #${libraryId} 所有系列...`, 'info');
-    try {
-        do {
-            const respStr = await asyncReq(`${location.origin}/api/v1/series?library_id=${libraryId}&page=${page}&size=200&sort=metadata.titleSort,asc`, 'GET');
-            const resp = JSON.parse(respStr);
-            if (resp?.content) {
-                allSeries = allSeries.concat(resp.content);
-                totalPages = resp.totalPages;
-                page++;
-                if (totalPages > 1) { // Only show progress if multiple pages
-                    showMessage(`已获取 ${allSeries.length}/${resp.totalElements || '?'} 系列... (页 ${page}/${totalPages})`, 'info', 2000);
-                }
-            } else {
-                // Handle cases where content might be empty but pagination info exists
-                if (resp && typeof resp.totalPages !== 'undefined') {
-                     totalPages = resp.totalPages;
-                     if (page >= totalPages) break; // All pages (possibly empty) processed
-                }
-                console.warn('[getAllSeriesInLibrary] API response invalid or empty content for a page:', resp);
-                if (allSeries.length === 0 && page === 0) { // If first page is bad and no series yet
-                    throw new Error('API响应无效或数据库为空。');
-                }
-                break; // Exit loop if response is not as expected but not on first empty page
-            }
-        } while (page < totalPages);
-        showMessage(`数据库 #${libraryId} 系列列表获取完毕，共 ${allSeries.length} 个。`, 'success');
-        return allSeries;
-    } catch (e) {
-        console.error(`[getAllSeriesInLibrary] Failed for library ${libraryId}:`, e);
-        showMessage(`获取数据库 #${libraryId} 系列列表失败: ${e.message || e}.`, 'error', 10000);
-        return []; // Return empty on error
-    }
 }
 
 async function batchMatchLibrarySeries(libraryId) {
