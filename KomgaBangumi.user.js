@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.6.0
+// @version      2.6.1
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2142,7 +2142,11 @@ async function search(komgaSeriesId, $dom) {
 
 function extractAndNormalizeTitle(str) {
     const title = extractSeriesTitles(String(str), 1)[0] || '';
-    return title.replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ').trim().toLowerCase();
+    return title
+        .replace(/[:：•·․,，。'’?？!！~⁓～]/g, ' ')
+        .replace(/\s+/g, '')
+        .trim()
+        .toLowerCase();
 }
 
 async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'btv', syncType = 'meta', batchStats) {
