@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.7.0
+// @version      2.7.5
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1198,7 +1198,7 @@ async function getAllSeries(payload, page = 0, pageSize = 2000) {
     const params = new URLSearchParams({
         page: String(page),
         size: String(pageSize),
-        sort: "metadata.titleSort,asc"
+        sort: "lastModified,desc"
     });
     try {
         const respText = await asyncReq(`${url}?${params.toString()}`, 'POST', payload);
@@ -1618,6 +1618,10 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
                     if (mate.summary) bookMeta.summary = mate.summary;
                     if (mate.releaseDate) bookMeta.releaseDate = mate.releaseDate;
                     if (mate.isbn) bookMeta.isbn = mate.isbn;
+                    if (mate.metadata?.links) bookMeta.links = mate.metadata.links;
+                    if (mate.metadata?.tags && mate.metadata.tags.length > 0) {
+                        bookMeta.tags = mate.metadata.tags.map(tag => tag.trim()).filter(tag => tag !== '');
+                    };
                 }
 
                 await updateKomgaBookMeta(book, seriesName, bookMeta);
@@ -2185,7 +2189,22 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     
     const volumeMatesWithCovers = await asyncPool(volumes, volumeMatesFetcher, 10);
     const bookVolumeCoverSets = volumeMatesWithCovers.map(v => ({ coverUrls: v.coverUrls }));
-    const volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
+    let volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
+
+    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
+    if (komgaSeries.oneshot) {
+        const existingVol = volumeMates[0] || {};
+        const mergedVol = {
+            ...existingVol,
+            ...komgaSeries,
+        };
+
+        if (komgaSeries.metadata?.summary) {
+            mergedVol.summary = komgaSeries.metadata.summary;
+        }
+
+        volumeMates = [mergedVol];
+    }
 
     // --- 更新系列封面 ---
     if (fetchSeriesType === 'all') {
@@ -2708,81 +2727,71 @@ function addBatchMatchButtonIfNeeded() {
 
 function main() {
     console.log("KomgaBangumi script started. Setting up observer.");
+
+    const SERIES_CARD_SELECTOR = 'div[class*="v-card"], div.my-2.mx-2, .card-container';
+    const DETAIL_CARD_SELECTOR = 'div.container > div > div > .v-card:first-child';
+
+    function getSeriesIdFromHref(href) {
+        if (!href) return null;
+        let match = href.match(/\/series\/(\w+)/);
+        if (match) return match[1];
+        match = href.match(/\/oneshot\/(\w+)/);
+        if (match) return match[1];
+        return null;
+    }
+
+    function scanAndInjectButtons(root) {
+        const $root = root ? $(root) : $(document);
+
+        $root.find(SERIES_CARD_SELECTOR).addBack(SERIES_CARD_SELECTOR).each(function() {
+            const $card = $(this);
+            if ($card.find('button[komgaseriesid]').length) return;
+            const bgStyle = $card.find('.v-image__image').attr('style') || '';
+            if (bgStyle.includes('/thumbnails/')) return;
+            const $link = $card.find('a[href]').first();
+            const id = getSeriesIdFromHref($link.attr('href'));
+            if (id) loadSearchBtn($card, id);
+        });
+
+        const $detailCard = $root.find(DETAIL_CARD_SELECTOR).addBack(DETAIL_CARD_SELECTOR).first();
+        if ($detailCard.length > 0 && $detailCard.find('button[komgaseriesid]').length === 0) {
+            const currentHref = location.href.replace(/%2F/g, '/');
+            const id = getSeriesIdFromHref(currentHref);
+            if (id) loadSearchBtn($detailCard, id);
+        }
+    }
+
     const observer = new MutationObserver(mutations => {
+        const addedElements = [];
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
-                if (node.nodeType === 1) { // Process only element nodes
-                    // For series cards (grid/list view)
-                    const $potentialCards = $(node).find('div[class*="v-card"], div.my-2.mx-2, .card-container').addBack('div[class*="v-card"], div.my-2.mx-2, .card-container');
-                    $potentialCards.each(function () {
-                        const $card = $(this);
-                        if ($card.find('button[komgaseriesid]').length > 0) return; // Buttons already added
-                        const $linkDiv = $card.find('a[href*="/series/"]').first();
-                        if ($linkDiv.length > 0) {
-                            const href = $linkDiv.attr('href');
-                            const idMatch = href ? href.match(/\/series\/(\w+)/) : null;
-                            if (idMatch && idMatch[1]) {
-                                loadSearchBtn($card, idMatch[1]);
-                            }
-                        }
-                    });
-
-                    // For series detail view (card is usually a direct child of container structure)
-                    // More specific selector for detail view to avoid conflicts
-                    let $detailCard = $(node).find('div.container > div > div > .v-card:first-child').addBack('div.container > div > div > .v-card:first-child');
-                    if ($detailCard.length > 0 ) {
-                         $detailCard = $detailCard.first(); // Ensure only one if multiple somehow match
-                         // Check if it's actually a series detail page context, e.g. by URL
-                         const currentHref = location.href.replace(/%2F/g, '/'); // Handle encoded slashes
-                         const detailMatch = currentHref.match(/\/series\/(\w+)/);
-                         if (detailMatch && detailMatch[1]) {
-                             if ($detailCard.find('button[komgaseriesid]').length > 0) return;
-                             loadSearchBtn($detailCard, detailMatch[1]);
-                         }
-                    }
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    addedElements.push(node);
                 }
             });
         });
-        // After DOM mutations, re-check if batch button needs to be added/removed
-        addBatchMatchButtonIfNeeded();
+        if (addedElements.length > 0) {
+            addedElements.forEach(el => scanAndInjectButtons(el));
+            addBatchMatchButtonIfNeeded();
+        }
     });
 
-    // Start observing the main app container or body
-    let observerIntervalId = setInterval(function () {
+    let observerIntervalId = setInterval(() => {
         const targetNode = document.getElementById('app') || document.body;
         if (targetNode) {
-             observer.observe(targetNode, { childList: true, subtree: true });
-             clearInterval(observerIntervalId);
-             console.log("KomgaBangumi: Observer attached. Performing initial UI checks...");
-             // Initial run for elements already on the page
-             $('div[class*="v-card"], div.my-2.mx-2, .card-container').each(function() { // Cards in library view
-                   const $card = $(this);
-                   if ($card.find('button[komgaseriesid]').length === 0) { // No buttons yet
-                       const $linkDiv = $card.find('a[href*="/series/"]').first();
-                       if ($linkDiv.length > 0) {
-                           const href = $linkDiv.attr('href');
-                           const idMatch = href ? href.match(/\/series\/(\w+)/) : null;
-                           if (idMatch && idMatch[1]) loadSearchBtn($card, idMatch[1]);
-                       }
-                   }
-              });
-              // Initial run for detail view if already on such a page
-              const $initialDetailCard = $('div.container > div > div > .v-card:first-child').first();
-               if ($initialDetailCard.length > 0 && $initialDetailCard.find('button[komgaseriesid]').length === 0) {
-                   const currentHref = location.href.replace(/%2F/g, '/');
-                   const detailMatch = currentHref.match(/\/series\/(\w+)/);
-                   if (detailMatch && detailMatch[1]) loadSearchBtn($initialDetailCard, detailMatch[1]);
-               }
-             addBatchMatchButtonIfNeeded(); // Initial check for batch button
+            observer.observe(targetNode, { childList: true, subtree: true });
+            clearInterval(observerIntervalId);
+            console.log("KomgaBangumi: Observer attached. Performing initial UI checks...");
+            scanAndInjectButtons();
+            addBatchMatchButtonIfNeeded();
         }
     }, 500);
 
-    loadMessage(); // Setup message area
+    loadMessage();
 
-    // Register Tampermonkey menu command for setting Bangumi Access Token
     if (typeof GM_registerMenuCommand === "function") {
         GM_registerMenuCommand("选择匹配类型（漫画/小说）", setBangumiMatchType);
-        GM_registerMenuCommand('设置Bangumi Access Token', setBangumiAccessToken, 'B'); // 'B' 是一个快捷访问键
+        GM_registerMenuCommand('设置Bangumi Access Token', setBangumiAccessToken, 'B');
     }
 
     console.log("KomgaBangumi main execution finished setting up.");
