@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.7.7
+// @version      2.7.8
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2053,7 +2053,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const publisherKeywords = [
         '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
         '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', 'bili', 
-        'bilibili', '哔哩哔哩', '汉化',
+        'bilibili', '哔哩哔哩', '汉化', '生肉', '日版', '原版', '正版', '官方',
+        '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体',
     ];
 
     const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
@@ -2073,7 +2074,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     let publisherVal = parseInfobox(infobox, '出版社');
     if (publisherVal) {
         seriesMeta.publisher = t2s(publisherVal.split('、')[0].trim()); // Take first publisher, convert to simplified
-    } else if (matchedKeyword) {
+    } else if (matchedKeyword && !seriesMeta.publisher) {
         seriesMeta.publisher = matchedKeyword;
     }
 
@@ -2369,7 +2370,8 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
         const publisherKeywords = [
             '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
             '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', '角川', '东贩',
-            '集英', '讲谈社', '小学馆', 'bili', 'bilibili', '哔哩哔哩',
+            '集英', '讲谈社', '小学馆', 'bili', 'bilibili', '哔哩哔哩', '汉化', '生肉', '日版',
+            '原版', '正版', '官方', '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体', 
         ];
 
         const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
@@ -2383,10 +2385,10 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
         }
 
         const publisherVal = infoEleText.match(/版本：(.*?)(?:\s|最後出版：|$)/);
-        if (matchedKeyword) {
-            seriesMeta.publisher = matchedKeyword;
-        } else if (publisherVal && publisherVal[1]) {
+        if (publisherVal && publisherVal[1]) {
             seriesMeta.publisher = t2s(publisherVal[1].trim());
+        } else if (matchedKeyword && !seriesMeta.publisher) {
+            seriesMeta.publisher = matchedKeyword;
         }
     }
 
