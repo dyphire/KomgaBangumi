@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.7.6
+// @version      2.7.7
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1566,7 +1566,7 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
     return false;
 }
 
-async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolumeCoverSets, volumeMates = []) {
+async function updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesName, bookAuthors, bookVolumeCoverSets, volumeMates = []) {
     // bookVolumeCoverSets 结构: [{ coverUrls: [urlL, urlM, urlC] }, { coverUrls: [...] }, ...]
     // 或者是空数组 [] (无封面或只更新作者)
     if (!seriesBooks || seriesBooks.numberOfElements === 0) return;
@@ -1574,6 +1574,21 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
     if (seriesBooks.numberOfElements >= maxReqBooks) {
         showMessage(`系列《${seriesName}》的书籍数量 (${seriesBooks.numberOfElements}) 达到或超过 ${maxReqBooks} 的限制，跳过书籍处理。`, 'warning', 6000);
         return;
+    }
+
+    const series = await getKomgaSeriesData(komgaSeriesId);
+    if (series.oneshot) {
+        const existingVol = (volumeMates && volumeMates.length > 0) ? volumeMates[0] : {};
+        const mergedVol = {
+            ...existingVol,
+            ...series,
+        };
+
+        if (series.metadata?.summary) {
+            mergedVol.summary = series.metadata.summary;
+        }
+
+        volumeMates = [mergedVol];
     }
 
     const booksToProcess = seriesBooks.content || [];
@@ -1605,7 +1620,13 @@ async function updateKomgaBookAll(seriesBooks, seriesName, bookAuthors, bookVolu
         try {
             // 查找volumeMates中匹配的卷
             const volNumInt = parseInt(volNum, 10);
-            const mate = (volumeMates.length > 0 && volNumInt > 0) ? volumeMates.find(m => parseInt(m.num, 10) === volNumInt) : null;
+            let mate = null;
+
+            if (series.oneshot) {
+                mate = volumeMates.length > 0 ? volumeMates[0] : null;
+            } else if (volumeMates.length > 0 && volNumInt > 0) {
+                mate = volumeMates.find(m => parseInt(m.num, 10) === volNumInt) || null;
+            }
 
             if (bookUpdateNeeded) {
                 const bookMeta = {
@@ -2210,21 +2231,6 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const bookVolumeCoverSets = volumeMatesWithCovers.map(v => ({ coverUrls: v.coverUrls }));
     let volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
 
-    const komgaSeriesData = await getKomgaSeriesData(komgaSeriesId);
-    if (komgaSeriesData.oneshot) {
-        const existingVol = volumeMates[0] || {};
-        const mergedVol = {
-            ...existingVol,
-            ...komgaSeriesData,
-        };
-
-        if (komgaSeriesData.metadata?.summary) {
-            mergedVol.summary = komgaSeriesData.metadata.summary;
-        }
-
-        volumeMates = [mergedVol];
-    }
-
     // --- 更新系列封面 ---
     if (fetchSeriesType === 'all') {
         if (uniqueSeriesCoverUrls.length > 0) {
@@ -2233,10 +2239,10 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
             showMessage(`《${seriesNameForDisplay}》未能获取系列主封面 (BGM API)`, 'warning');
         }
 
-        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bookVolumeCoverSets, volumeMates);
+        await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bookVolumeCoverSets, volumeMates);
     } else if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 'meta' only sync, but authors need update
         console.log(`[fetchBtvSubjectByUrlAPI] 更新系列 ${komgaSeriesId} 的作者或卷信息`);
-        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, [], volumeMates); // Pass empty cover sets
+        await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, [], volumeMates); // Pass empty cover sets
     }
 }
 
@@ -2359,6 +2365,29 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
         if (tagsMatch && tagsMatch[1]) {
             seriesMeta.tags = tagsMatch[1].trim().split(/\s+/).filter(Boolean).map(t => t2s(t));
         }
+
+        const publisherKeywords = [
+            '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
+            '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', '角川', '东贩',
+            '集英', '讲谈社', '小学馆', 'bili', 'bilibili', '哔哩哔哩',
+        ];
+
+        const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
+        const seriesName = komgaSeries.name || '';
+        const matchedKeyword = publisherKeywords.find(keyword => 
+            t2s(seriesName).includes(keyword)
+        );
+
+        if (matchedKeyword && !seriesMeta.tags.includes(matchedKeyword)) {
+            seriesMeta.tags.push(matchedKeyword);
+        }
+
+        const publisherVal = infoEleText.match(/版本：(.*?)(?:\s|最後出版：|$)/);
+        if (matchedKeyword) {
+            seriesMeta.publisher = matchedKeyword;
+        } else if (publisherVal && publisherVal[1]) {
+            seriesMeta.publisher = t2s(publisherVal[1].trim());
+        }
     }
 
     seriesMeta.links.push({ label: 'Mox', url: `https://kox.moe/c/${moeSeriesId}.htm` }); // Add Mox link
@@ -2371,6 +2400,7 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
     const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
     const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
     const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBook(seriesBooks, finalMeta.authors);
+    const needUpdateVolumeNums = getVolumeNumsNeedUpdate(seriesBooks);
 
     if (fetchSeriesType === 'all') {
         let bofVolumeRawCoverUrls = [];
@@ -2407,17 +2437,17 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
         if (bofVolumeRawCoverUrls.length > 0) {
             await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, [bofVolumeRawCoverUrls[0]]); // 使用第一个卷的封面作为系列封面
             const bofBookVolumeCoverSets = bofVolumeRawCoverUrls.map(url => ({ coverUrls: [url] })); // BoF usually has one cover per vol
-            await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bofBookVolumeCoverSets);
+            await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bofBookVolumeCoverSets);
         } else {
             if (bookCoverFrameUrl) { // If frame URL existed but parsing failed
                  showMessage(`《${seriesNameForDisplay}》未能从 BoF 封面数据中解析出有效封面链接`, 'warning');
             }
-            if (updateAuthorsFlag) { // 即使没有封面，也可能需要更新作者
-                 await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+            if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 即使没有封面，也可能需要更新作者
+                 await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
             }
         }
-    } else if (updateAuthorsFlag) { // 'meta' only sync, but authors need update
-        await updateKomgaBookAll(seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+    } else if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 'meta' only sync, but authors need update
+        await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
     }
 }
 //</editor-fold>
