@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.7.5
+// @version      2.7.6
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2028,6 +2028,23 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
     }
 
+    // 追加识别系列文件夹名称中的出版社/汉化信息
+    const publisherKeywords = [
+        '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
+        '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', 'bili', 
+        'bilibili', '哔哩哔哩', '汉化',
+    ];
+
+    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
+    const seriesName = komgaSeries.name || '';
+    const matchedKeyword = publisherKeywords.find(keyword => 
+        t2s(seriesName).includes(keyword)
+    );
+
+    if (matchedKeyword && !seriesMeta.tags.includes(matchedKeyword)) {
+        seriesMeta.tags.push(matchedKeyword);
+    }
+
     const infobox = btvData.infobox || [];
     let resAuthors = [];
     let seriesIndividualAliases = []; // For aliases from infobox
@@ -2035,6 +2052,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     let publisherVal = parseInfobox(infobox, '出版社');
     if (publisherVal) {
         seriesMeta.publisher = t2s(publisherVal.split('、')[0].trim()); // Take first publisher, convert to simplified
+    } else if (matchedKeyword) {
+        seriesMeta.publisher = matchedKeyword;
     }
 
     // Define author roles mapping for Komga
@@ -2191,16 +2210,16 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const bookVolumeCoverSets = volumeMatesWithCovers.map(v => ({ coverUrls: v.coverUrls }));
     let volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
 
-    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
-    if (komgaSeries.oneshot) {
+    const komgaSeriesData = await getKomgaSeriesData(komgaSeriesId);
+    if (komgaSeriesData.oneshot) {
         const existingVol = volumeMates[0] || {};
         const mergedVol = {
             ...existingVol,
-            ...komgaSeries,
+            ...komgaSeriesData,
         };
 
-        if (komgaSeries.metadata?.summary) {
-            mergedVol.summary = komgaSeries.metadata.summary;
+        if (komgaSeriesData.metadata?.summary) {
+            mergedVol.summary = komgaSeriesData.metadata.summary;
         }
 
         volumeMates = [mergedVol];
