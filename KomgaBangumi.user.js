@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.7.8
+// @version      2.8.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -35,7 +35,7 @@ const sourceLabels = ['Btv', 'Bof']; // Btv now uses API
 const btvApiUrl = 'https://api.bgm.tv';
 const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject links
 const bofUrl = 'https://bookof.moe';
-const tagLabels = '架空,搞笑,热血,运动,恋爱,轻改,后宫,校园,少年,少女,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行，异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,';
+const tagLabels = '架空,搞笑,欢乐,欢乐向,热血,运动,恋爱,轻改,后宫,校园,青年,少年,少女,青年向,少年向,少女向,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行，异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,连载,连载中,完结,已完结,停刊,长期休载,停止连载,休刊';
 const equalLabels = ['治愈,治癒', '校园欺凌,校园霸凌', '轻改,轻小说改', '工口,色气,卖肉'];
 
 const defaultReqHeaders = { // Renamed to avoid conflict with local var 'defaultHeaders' in asyncReq
@@ -1983,6 +1983,7 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
 }
 
 async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') {
+    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
     const subjectId = reqSeriesId || (reqSeriesUrl.match(/subject\/(\d+)/) ? reqSeriesUrl.match(/subject\/(\d+)/)[1] : null);
     if (!subjectId) {
         throw new Error("Bangumi Subject ID is missing.");
@@ -2012,6 +2013,9 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
       .trim();
   
     seriesMeta.totalBookCount = btvData.volumes || btvData.eps || btvData.total_episodes || null;
+
+    seriesMeta.genres = komgaSeries.genres || [];
+    seriesMeta.genres.push(btvData.platform);
 
     if (btvData.tags && btvData.tags.length > 0) {
         const rawApiTags = btvData.tags
@@ -2057,7 +2061,6 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体',
     ];
 
-    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
     const seriesName = komgaSeries.name || '';
     const matchedKeyword = publisherKeywords.find(keyword => 
         t2s(seriesName).includes(keyword)
@@ -2065,6 +2068,19 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     if (matchedKeyword && !seriesMeta.tags.includes(matchedKeyword)) {
         seriesMeta.tags.push(matchedKeyword);
+    }
+
+    seriesMeta.tags.push(btvData.platform);
+
+    if (btvData.rating && typeof btvData.rating.score === 'number' && btvData.rating.score > 0) {
+        seriesMeta.tags.push(`${Math.round(btvData.rating.score)}分`);
+    }
+
+    if (btvData.meta_tags && btvData.meta_tags.length > 0) {
+        seriesMeta.tags = Array.from(new Set([
+            ...(seriesMeta.tags || []),
+            ...btvData.meta_tags
+        ]));
     }
 
     const infobox = btvData.infobox || [];
@@ -2127,10 +2143,17 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     });
 
     // Status from infobox (keys like "状态", "连载状态", "刊行状态")
+    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"]
     let statusVal = parseInfobox(infobox, '状态') || parseInfobox(infobox, '连载状态') || parseInfobox(infobox, '刊行状态');
+    if (!statusVal) {
+        const foundStatus = seriesMeta.tags.find(tag => statusTags.includes(tag));
+        if (foundStatus) {
+            statusVal = foundStatus;
+        }
+    }
     if (statusVal) {
         statusVal = t2s(statusVal.toLowerCase()); // Convert to simplified Chinese and lower case for matching
-        if (statusVal.includes('休刊') || statusVal.includes('长期休载')) seriesMeta.status = 'HIATUS';
+        if (statusVal.includes('休刊') || statusVal.includes('停刊')  || statusVal.includes('停止连载') || statusVal.includes('长期休载')) seriesMeta.status = 'HIATUS';
         else if (statusVal.includes('连载中') || statusVal.includes('连载')) seriesMeta.status = 'ONGOING';
         else if (statusVal.includes('完结') || statusVal.includes('已完结')) seriesMeta.status = 'ENDED';
         // else if (statusVal.includes('宣布动画化')) seriesMeta.status = 'ONGOING'; // Or some other appropriate status
