@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.8.1
+// @version      2.8.5
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1193,11 +1193,10 @@ async function asyncPool(items, asyncFn, limit = 5) {
 
 //<editor-fold desc="API封装-系列">
 // 单页获取符合条件的系列
-async function getAllSeries(payload, page = 0, pageSize = 2000) {
+async function getAllSeries(payload) {
     const url = `${location.origin}/api/v1/series/list`;
     const params = new URLSearchParams({
-        page: String(page),
-        size: String(pageSize),
+        unpaged: "true",
         sort: "lastModified,desc"
     });
     try {
@@ -1205,54 +1204,36 @@ async function getAllSeries(payload, page = 0, pageSize = 2000) {
         const data = JSON.parse(respText);
         return data?.content || [];
     } catch (e) {
-        console.error(`[getAllSeries] 获取第 ${page + 1} 页数据失败:`, e);
+        console.error(`[getAllSeries] 获取系列数据失败:`, e);
         throw e;
     }
 }
 
 async function getSeriesWithLibraryId(libraryId) {
-    const allSeries = [];
-    const pageSize = 2000;
-    let page = 0;
     const payload = {
         condition: {
             allOf: [
-                {
-                    libraryId: {
-                        operator: "is",
-                        value: libraryId
-                    }
-                },
-                {
-                    deleted: {
-                        operator: "isFalse"
-                    }
-                }
+                { libraryId: { operator: "is", value: libraryId } },
+                { deleted: { operator: "isFalse" } }
             ]
         }
     };
     showMessage(`正在获取数据库 #${libraryId} 所有系列...`, 'info');
-    while (true) {
-        try {
-            const pageSeries = await getAllSeries(payload, page, pageSize);
-            allSeries.push(...pageSeries);
-            showMessage(`已获取 ${allSeries.length} 条系列 (页 ${page + 1})`, 'info', 2000);
-            if (pageSeries.length < pageSize) break; // 最后一页跳出
-            page++;
-        } catch (e) {
-            showMessage(`获取数据库 #${libraryId} 系列失败: ${e.message || e}`, 'error', 5000);
-            break;
-        }
+
+    try {
+        const allSeries = await getAllSeries(payload);
+        showMessage(`数据库 #${libraryId} 系列列表获取完毕，共 ${allSeries.length} 个`, 'success');
+        return allSeries;
+    } catch (e) {
+        showMessage(`获取数据库 #${libraryId} 系列失败: ${e.message || e}`, 'error', 5000);
+        return [];
     }
-    showMessage(`数据库 #${libraryId} 系列列表获取完毕，共 ${allSeries.length} 个`, 'success');
-    return allSeries;
 }
 
 async function getSeriesWithCollection(collectionIds) {
     const ids = Array.isArray(collectionIds) ? collectionIds : [collectionIds];
     const allSeries = [];
-    const pageSize = 2000;
-    let page = 0;
+
     for (const id of ids) {
         const payload = {
             condition: {
@@ -1263,22 +1244,16 @@ async function getSeriesWithCollection(collectionIds) {
             }
         };
 
-        while (true) {
-            try {
-                const seriesList = await getAllSeries(payload, page, pageSize);
-                if (seriesList.length === 0) break;
-                allSeries.push(...seriesList);
-                showMessage(`已获取收藏夹 #${id} 的系列：共 ${allSeries.length} 项 (页 ${page + 1})`, 'info', 3000);
-                if (seriesList.length < pageSize) break;
-                page++;
-            } catch (error) {
-                console.error(`获取收藏夹 #${id} 系列时出错:`, error);
-                showMessage(`获取收藏夹 #${id} 系列失败：${error.message || error}`, 'error', 5000);
-                break;
-            }
+        try {
+            const seriesList = await getAllSeries(payload);
+            allSeries.push(...seriesList);
+            showMessage(`收藏夹 #${id} 系列列表获取完毕，共 ${seriesList.length} 个`, 'success');
+        } catch (error) {
+            console.error(`获取收藏夹 #${id} 系列时出错:`, error);
+            showMessage(`获取收藏夹 #${id} 系列失败：${error.message || error}`, 'error', 5000);
         }
-        showMessage(`收藏夹 #${id} 系列列表获取完毕，共 ${allSeries.length} 个`, 'success');
     }
+
     return allSeries;
 }
 
@@ -1441,9 +1416,6 @@ async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
 //<editor-fold desc="API封装-话卷">
 async function getKomgaSeriesBooks(komgaSeriesId) {
     const url = `${location.origin}/api/v1/books/list`;
-    const pageSize = 1000;
-    let page = 0;
-    let allBooks = [];
 
     const payload = {
         condition: {
@@ -1463,33 +1435,28 @@ async function getKomgaSeriesBooks(komgaSeriesId) {
         }
     };
 
-    while (true) {
-        const params = new URLSearchParams({
-            page: String(page),
-            size: String(pageSize),
-            sort: "metadata.numberSort,asc"
-        });
+    const params = new URLSearchParams({
+        unpaged: "true",
+        sort: "metadata.numberSort,asc"
+    });
 
-        try {
-            const resText = await asyncReq(`${url}?${params.toString()}`, 'POST', payload);
-            const data = JSON.parse(resText);
-            const content = data?.content || [];
+    try {
+        const resText = await asyncReq(`${url}?${params.toString()}`, 'POST', payload);
+        const data = JSON.parse(resText);
+        const allBooks = data?.content || [];
 
-            allBooks.push(...content);
-
-            if (content.length < pageSize) break; // 最后一页
-            page++;
-        } catch (e) {
-            console.error(`[getKomgaSeriesBooks] 获取系列 ${komgaSeriesId} 第 ${page} 页失败:`, e);
-            showMessage(`获取系列 ${komgaSeriesId} 的书籍失败（第 ${page} 页）`, 'error');
-            break;
-        }
+        return {
+            content: allBooks,
+            numberOfElements: allBooks.length
+        };
+    } catch (e) {
+        console.error(`[getKomgaSeriesBooks] 获取系列 ${komgaSeriesId} 书籍失败:`, e);
+        showMessage(`获取系列 ${komgaSeriesId} 的书籍失败`, 'error');
+        return {
+            content: [],
+            numberOfElements: 0
+        };
     }
-
-    return {
-        content: allBooks,
-        numberOfElements: allBooks.length
-    };
 }
 
 async function updateKomgaBookMeta(book, komgaSeriesName, bookMeta) {
@@ -1734,48 +1701,74 @@ const MANUAL_MATCH_COLLECTION_NAME = "手动匹配";
 let _manualMatchCollectionId = null;
 let _manualMatchCollectionExistingSeriesIds = []; // Cache existing series IDs in the collection
 
+async function getAllCollections() {
+    const url = `${location.origin}/api/v1/collections?unpaged=true`;
+    try {
+        const resText = await asyncReq(url, 'GET');
+        const data = JSON.parse(resText);
+        return data?.content || [];
+    } catch (e) {
+        console.error('[getAllCollections] 获取收藏夹失败:', e);
+        throw e;
+    }
+}
+
+async function createCollection(name, seriesIds = [], ordered = false) {
+    const url = `${location.origin}/api/v1/collections`;
+    const payload = { name, seriesIds, ordered };
+    try {
+        const resText = await asyncReq(url, 'POST', payload);
+        const data = JSON.parse(resText);
+        return data;
+    } catch (e) {
+        console.error(`[createCollection] 创建收藏夹 "${name}" 失败:`, e);
+        throw e;
+    }
+}
+
+async function updateCollectionSeries(collectionId, seriesIds) {
+    if (!collectionId) throw new Error('collectionId 不能为空');
+    const url = `${location.origin}/api/v1/collections/${collectionId}`;
+    try {
+        await asyncReq(url, 'PATCH', { seriesIds });
+    } catch (e) {
+        console.error(`[updateCollectionSeries] 更新收藏夹 ${collectionId} 失败:`, e);
+        throw e;
+    }
+}
+
 async function ensureManualMatchCollectionExists(initialSeriesIdForCreation = null) {
     if (_manualMatchCollectionId) return true; // Already found/created
-    const collectionsUrl = `${location.origin}/api/v1/collections?unpaged=true`; // Get all collections
+
     try {
-        const collectionsPageStr = await asyncReq(collectionsUrl, 'GET');
-        const collectionsPage = JSON.parse(collectionsPageStr);
-        const collection = (collectionsPage.content || []).find(c => c.name === MANUAL_MATCH_COLLECTION_NAME);
+        const collections = await getAllCollections();
+        const collection = collections.find(c => c.name === MANUAL_MATCH_COLLECTION_NAME);
+
         if (collection) {
             _manualMatchCollectionId = collection.id;
             _manualMatchCollectionExistingSeriesIds = collection.seriesIds || [];
             console.log(`[收藏夹] 已找到 "${MANUAL_MATCH_COLLECTION_NAME}" (ID:${_manualMatchCollectionId})。包含 ${_manualMatchCollectionExistingSeriesIds.length} 个系列`);
             return true;
-        } else {
-            // Collection does not exist, attempt to create it
-            if (!initialSeriesIdForCreation) {
-                // If no series ID is provided to seed the collection, we can't create it with an empty series list (Komga might not allow)
-                // Or, we decide to create it empty if allowed. For now, let's require an ID.
-                console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，且未提供初始系列ID，将等待实际失败系列出现时创建`);
-                return false; // Indicate not ready, but not a hard error.
-            }
-            const createUrl = `${location.origin}/api/v1/collections`;
-            // Komga API to create a collection requires a name and seriesIds (can be empty or with the first failed ID)
-            // Let's try creating it with the first series ID that needs it.
-            let payload = {
-                name: MANUAL_MATCH_COLLECTION_NAME,
-                ordered: false, // Typically false for such a collection
-                seriesIds: [initialSeriesIdForCreation] // Seed with the first ID
-            };
-            console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，使用系列ID "${initialSeriesIdForCreation}" 创建, payload:`, JSON.stringify(payload));
-            const createdCollectionStr = await asyncReq(createUrl, 'POST', payload);
-            const created = JSON.parse(createdCollectionStr);
-            _manualMatchCollectionId = created.id;
-            _manualMatchCollectionExistingSeriesIds = created.seriesIds || [initialSeriesIdForCreation]; // Should contain the initial ID
-            showMessage(`[收藏夹] 已使用系列ID ${initialSeriesIdForCreation} 创建 "${MANUAL_MATCH_COLLECTION_NAME}" (ID:${_manualMatchCollectionId})`, 'success', 3500);
-            return true;
         }
+
+        if (!initialSeriesIdForCreation) {
+            console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，且未提供初始系列ID，将等待实际失败系列出现时创建`);
+            return false;
+        }
+
+        console.log(`[收藏夹] "${MANUAL_MATCH_COLLECTION_NAME}" 不存在，使用系列ID "${initialSeriesIdForCreation}" 创建`);
+        const created = await createCollection(MANUAL_MATCH_COLLECTION_NAME, [initialSeriesIdForCreation]);
+        _manualMatchCollectionId = created.id;
+        _manualMatchCollectionExistingSeriesIds = created.seriesIds || [initialSeriesIdForCreation];
+        showMessage(`[收藏夹] 已使用系列ID ${initialSeriesIdForCreation} 创建 "${MANUAL_MATCH_COLLECTION_NAME}" (ID:${_manualMatchCollectionId})`, 'success', 3500);
+        return true;
+
     } catch (error) {
         console.error(`[ensureManualMatchCollectionExists] 操作 "${MANUAL_MATCH_COLLECTION_NAME}" 失败:`, error);
         showMessage(`操作 "${MANUAL_MATCH_COLLECTION_NAME}" 收藏夹失败: ${error.message || error}`, 'error', 7000);
-        _manualMatchCollectionId = null; // Reset on error
+        _manualMatchCollectionId = null;
         _manualMatchCollectionExistingSeriesIds = [];
-        return false; // Creation or find failed
+        return false;
     }
 }
 
@@ -1783,25 +1776,22 @@ async function addSeriesToManualMatchCollectionImmediately(seriesIdToAdd, series
     if (!seriesIdToAdd) return false;
     let collectionReady = _manualMatchCollectionId ? true : false;
     if (!collectionReady) {
-        // Collection ID unknown, try to ensure/create it, using the current seriesId as a seed if creating
         collectionReady = await ensureManualMatchCollectionExists(seriesIdToAdd);
     }
+
     if (!collectionReady || !_manualMatchCollectionId) {
-        // If still not ready (e.g., creation failed or was skipped due to no initial ID before)
         showMessage(`[收藏夹] 因 "${MANUAL_MATCH_COLLECTION_NAME}" 未就绪/创建失败，无法添加《${seriesNameToAdd || seriesIdToAdd}》。`, 'error', 4000);
         return false;
     }
-    // At this point, _manualMatchCollectionId and _manualMatchCollectionExistingSeriesIds should be populated
+
     if (_manualMatchCollectionExistingSeriesIds.includes(seriesIdToAdd)) {
-        // console.log(`《${seriesNameToAdd || seriesIdToAdd}》已存在于 "${MANUAL_MATCH_COLLECTION_NAME}" 收藏夹中。`);
-        return true; // Already exists, no action needed
+        return true;
     }
-    // Series not in collection, add it
+
     const newSeriesList = [..._manualMatchCollectionExistingSeriesIds, seriesIdToAdd];
     try {
-        // Komga API to update collection's series list: PATCH the collection with the new seriesIds array
-        await asyncReq(`${location.origin}/api/v1/collections/${_manualMatchCollectionId}`, 'PATCH', { seriesIds: newSeriesList });
-        _manualMatchCollectionExistingSeriesIds.push(seriesIdToAdd); // Update local cache
+        await updateCollectionSeries(_manualMatchCollectionId, newSeriesList);
+        _manualMatchCollectionExistingSeriesIds.push(seriesIdToAdd);
         showMessage(`《${seriesNameToAdd || seriesIdToAdd}》已添加至 "${MANUAL_MATCH_COLLECTION_NAME}"。`, 'success', 3000);
         return true;
     } catch (error) {
@@ -2673,8 +2663,11 @@ async function batchMatchTarget(type, id, name) {
 
     _manualMatchCollectionId = null;
     _manualMatchCollectionExistingSeriesIds = [];
-
     let batchStats = { successCount: 0, failureCount: 0, skippedCount: 0, addedToCollectionCount: 0 };
+
+    await ensureManualMatchCollectionExists();
+
+    let seriesObjects = [];
     if (type === 'library') {
         seriesObjects = await getSeriesWithLibraryId(id);
     } else if (type === 'collection') {
@@ -2688,21 +2681,50 @@ async function batchMatchTarget(type, id, name) {
         return;
     }
 
+    let seriesToRemoveFromCollection = [];
+
+    showBatchProgress(0, seriesObjects.length, batchStats);
+
     for (let i = 0; i < seriesObjects.length; i++) {
         const seriesObj = seriesObjects[i];
         const seriesName = seriesObj.metadata.title || seriesObj.name;
 
+        if (type !== 'collection' && _manualMatchCollectionExistingSeriesIds.includes(seriesObj.id)) {
+            console.info(`[批量][${i + 1}/${seriesObjects.length}] 《${seriesName}》已在 "${MANUAL_MATCH_COLLECTION_NAME}" 收藏夹，跳过`);
+            batchStats.skippedCount++;
+            showBatchProgress(i + 1, seriesObjects.length, batchStats);
+            continue;
+        }
+
         console.info(`正在处理 ${i + 1}/${seriesObjects.length}：${seriesName} (${seriesObj.id})`);
+        try {
+            const result = await preciseMatchSeries(seriesObj.id, seriesName, 'btv', 'meta', batchStats, i + 1, seriesObjects.length);
 
-        const result = await preciseMatchSeries(seriesObj.id, seriesName, 'btv', 'meta', batchStats, i + 1, seriesObjects.length);
-
-        if (result.skipped) batchStats.skippedCount++;
-        else if (result.success) batchStats.successCount++;
-        else batchStats.failureCount++;
+            if (result.skipped) batchStats.skippedCount++;
+            else if (result.success) {
+                batchStats.successCount++;
+                if (type === 'collection') {
+                    seriesToRemoveFromCollection.push(seriesObj.id);
+                }
+            } else batchStats.failureCount++;
+        } catch (err) {
+            console.error(`[批量][${i + 1}/${seriesObjects.length}] 《${seriesName}》匹配出错:`, err);
+            batchStats.failureCount++;
+        }
 
         showBatchProgress(i + 1, seriesObjects.length, batchStats);
 
         await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    if (type === 'collection' && seriesToRemoveFromCollection.length > 0 && _manualMatchCollectionId) {
+        _manualMatchCollectionExistingSeriesIds = _manualMatchCollectionExistingSeriesIds.filter(id => !seriesToRemoveFromCollection.includes(id));
+        try {
+            await updateCollectionSeries(_manualMatchCollectionId, _manualMatchCollectionExistingSeriesIds);
+            console.info(`[收藏夹] 批量移除 ${seriesToRemoveFromCollection.length} 个系列完成`);
+        } catch (error) {
+            console.error(`[收藏夹] 批量移除系列失败:`, error);
+        }
     }
 
     hideBatchProgress();
@@ -2715,7 +2737,7 @@ async function batchMatchTarget(type, id, name) {
     } else if (batchStats.failureCount > 0 && !_manualMatchCollectionId) {
         summary += ` (因收藏夹操作失败，未能记录失败系列)。`;
     }
-    showMessage(summary, 'success', 20000);
+    showMessage(summary, 'success', 10000);
     console.info(`批量精确匹配完成！${type}#${id}：成功 ${batchStats.successCount}，失败 ${batchStats.failureCount}，跳过 ${batchStats.skippedCount}，共 ${seriesObjects.length}。`);
 }
 
