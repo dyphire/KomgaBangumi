@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.8.5
+// @version      2.8.6
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2007,6 +2007,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     seriesMeta.genres = komgaSeries.genres || [];
     seriesMeta.genres.push(btvData.platform);
 
+    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"]
+
     if (btvData.tags && btvData.tags.length > 0) {
         const rawApiTags = btvData.tags
             .map(t => ({ name: t.name, count: t.count }))
@@ -2073,6 +2075,16 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         ]));
     }
 
+    if (seriesMeta.tags && seriesMeta.tags.length > 0) {
+        const hasCompleted = seriesMeta.tags.includes("已完结") || seriesMeta.tags.includes("完结");
+        if (hasCompleted) {
+            let keepTag = seriesMeta.tags.includes("已完结") ? "已完结" : "完结";
+            seriesMeta.tags = seriesMeta.tags.filter(
+                t => !statusTags.includes(t) || t === keepTag
+            );
+        }
+    }
+
     const infobox = btvData.infobox || [];
     let resAuthors = [];
     let seriesIndividualAliases = []; // For aliases from infobox
@@ -2133,7 +2145,6 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     });
 
     // Status from infobox (keys like "状态", "连载状态", "刊行状态")
-    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"]
     let statusVal = parseInfobox(infobox, '状态') || parseInfobox(infobox, '连载状态') || parseInfobox(infobox, '刊行状态');
     if (!statusVal) {
         const foundStatus = seriesMeta.tags.find(tag => statusTags.includes(tag));
