@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.8.6
+// @version      2.8.7
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1491,7 +1491,13 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
 
             if (!blob || blob.size === 0) throw new Error("下载图片 blob 失败");
 
-            if (blob.size < 60 * 1024) {
+            if (blob.size >= 1024 * 1024) {
+                console.warn(`[updateKomgaBookCover] 跳过 ${imageSizeLabel} 封面，文件太大: ${blob.size} bytes`);
+                showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面太大(${(blob.size / 1024).toFixed(1)}kB)，跳过`, 'warning', 2000);
+                continue;
+            }
+
+            if (blob.size < 30 * 1024) {
                 console.warn(`[updateKomgaBookCover] 跳过 ${imageSizeLabel} 封面，文件太小: ${blob.size} bytes`);
                 showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面太小(${(blob.size / 1024).toFixed(1)}kB)，跳过`, 'warning', 2000);
                 continue;
