@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.0
+// @version      2.9.1
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2181,6 +2181,10 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         else if (statusVal.includes('连载中') || statusVal.includes('连载')) seriesMeta.status = 'ONGOING';
         else if (statusVal.includes('完结') || statusVal.includes('已完结')) seriesMeta.status = 'ENDED';
         // else if (statusVal.includes('宣布动画化')) seriesMeta.status = 'ONGOING'; // Or some other appropriate status
+    }
+
+    if (parseInfobox(infobox, '结束') || parseInfobox(infobox, '完结') || (seriesMeta.totalBookCount && seriesMeta.totalBookCount > 0)) {
+        seriesMeta.status = 'ENDED';
     }
 
     let finalMeta = await filterSeriesMeta(komgaSeriesId, seriesMeta);
