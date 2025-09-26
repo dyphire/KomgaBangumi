@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.1
+// @version      2.9.5
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1969,9 +1969,10 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
               // 提取作者 (优先作画，其次作者，再次原作)
               const authorFromInfo = parseInfobox(item.infobox, "作画") ||
                                      parseInfobox(item.infobox, "作者") ||
-                                     parseInfobox(item.infobox, "原作");
+                                     parseInfobox(item.infobox, "原作") ||
+                                     parseInfobox(item.infobox, "脚本");
               if (authorFromInfo) {
-                  authorName = authorFromInfo.split('、')[0].trim(); // 取第一个作为主要作者
+                  authorName = authorFromInfo.split('、')[0].replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim(); // 取第一个作为主要作者
               }
 
               // 提取并处理别名
@@ -2032,19 +2033,19 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     seriesMeta.genres = komgaSeries.genres || [];
     seriesMeta.genres.push(btvData.platform);
 
-    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"]
+    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"];
 
     if (btvData.tags && btvData.tags.length > 0) {
         const rawApiTags = btvData.tags
             .map(t => ({ name: t.name, count: t.count }))
-            .filter(tag => tagLabels.includes(tag.name + ','));
-    
+            .filter(tag => tagLabels.includes(tag.name + ',') && !statusTags.includes(tag.name));
+
         if (rawApiTags.length > 0) {
             let validTags = rawApiTags
-                .filter(tag => tagLabels.includes(tag.name + ","))
+                .filter(tag => tagLabels.includes(tag.name + ",") && !statusTags.includes(tag.name))
                 .sort((a, b) => b.count - a.count);
             const maxTagCount = Math.max(1, ...validTags.map(tag => tag.count));
-    
+
             let thresholdTagCount = 3;
             if (maxTagCount > 200) {
                 thresholdTagCount = 35;
@@ -2091,13 +2092,6 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         seriesMeta.tags.push(`${Math.round(btvData.rating.score)}分`);
     }
 
-    if (btvData.meta_tags && btvData.meta_tags.length > 0) {
-        seriesMeta.tags = Array.from(new Set([
-            ...(seriesMeta.tags || []),
-            ...btvData.meta_tags
-        ]));
-    }
-
     if (seriesMeta.tags && seriesMeta.tags.length > 0) {
         const hasCompleted = seriesMeta.tags.includes("已完结") || seriesMeta.tags.includes("完结");
         if (hasCompleted) {
@@ -2112,7 +2106,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     let resAuthors = [];
     let seriesIndividualAliases = []; // For aliases from infobox
 
-    let publisherVal = parseInfobox(infobox, '出版社');
+    let publisherVal = parseInfobox(infobox, '出版社') || parseInfobox(infobox, '连载杂志') || parseInfobox(infobox, '制作');
     if (publisherVal) {
         seriesMeta.publisher = t2s(publisherVal.split('、')[0].trim()); // Take first publisher, convert to simplified
     } else if (matchedKeyword && !seriesMeta.publisher) {
@@ -2121,9 +2115,9 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     // Define author roles mapping for Komga
     const authorRoles = {
-        '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '漫画家': 'writer', 
+        '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '脚本': 'writer', '漫画家': 'writer', 
         '作画': 'penciller', '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
-        '原案': 'story', '脚本': 'scriptwriter', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
+        '原案': 'story', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
         // Add more roles as needed and map them to Komga's supported roles
     };
     for (const [key, role] of Object.entries(authorRoles)) {
@@ -2131,7 +2125,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
             val.split('、').forEach(name => { // Handle multiple authors for the same role
-                const trimmedName = name.trim();
+                const trimmedName = name.replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
                 }
