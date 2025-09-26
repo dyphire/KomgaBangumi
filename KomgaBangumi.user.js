@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.8.7
+// @version      2.9.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -46,7 +46,7 @@ const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Ba
 const BANGUMI_MATCH_TYPE_KEY = "bangumi_match_type"; // 用于存储匹配类型的键名
 
 const bangumiApiHeaders = {
-    'User-Agent': `KomgaBangumi/${GM_info.script.version} (UserScript; https://github.com/your-repo-or-contact)`,
+    'User-Agent': `${GM_info.script.name}/${GM_info.script.version} (UserScript; ${GM_info.script.namespace})`,
     'Accept': 'application/json'
     // Authorization 如果令牌存在，将被动态添加
 };
@@ -484,8 +484,8 @@ function loadSearchBtn($dom, komgaSeriesId) {
 
     if (isLeftSidePage) {
         // 在 '/collections' 或 '/readlists' 页面，图标移动到左侧
-        $syncAll.css({ ...currentBtnStyle, left: '10px' }); // 第一个图标靠左
-        $syncInfo.css({ ...currentBtnStyle, left: btnDia + 15 + 'px' }); // 第二个图标在第一个图标的右边
+        $syncInfo.css({ ...currentBtnStyle, left: '10px' });
+        $syncAll.css({ ...currentBtnStyle, left: btnDia + 15 + 'px' });
     } else {
         // 其他页面，图标保持在右侧
         $syncAll.css({ ...currentBtnStyle, right: '10px' });
@@ -1806,6 +1806,25 @@ async function addSeriesToManualMatchCollectionImmediately(seriesIdToAdd, series
         return false;
     }
 }
+
+async function removeSeriesFromManualMatchCollectionIfExists(seriesIdToRemove, seriesNameToRemove) {
+    if (!seriesIdToRemove || !_manualMatchCollectionId) return false;
+
+    if (!_manualMatchCollectionExistingSeriesIds.includes(seriesIdToRemove)) {
+        return false; // Not in collection, nothing to remove
+    }
+
+    const newSeriesList = _manualMatchCollectionExistingSeriesIds.filter(id => id !== seriesIdToRemove);
+    try {
+        await updateCollectionSeries(_manualMatchCollectionId, newSeriesList);
+        _manualMatchCollectionExistingSeriesIds = newSeriesList;
+        console.info(`[收藏夹] 《${seriesNameToRemove || seriesIdToRemove}》已从 "${MANUAL_MATCH_COLLECTION_NAME}" 移除 (匹配成功)`);
+        return true;
+    } catch (error) {
+        console.error(`[removeSeriesFromColl] 从收藏夹移除系列 ${seriesIdToRemove} ("${seriesNameToRemove}") 失败:`, error);
+        return false;
+    }
+}
 //</editor-fold>
 
 // ************************************* 第三方请求 (Bangumi API and bookof.moe) *************************************
@@ -1965,7 +1984,7 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
               orititle: item.name, // 原始名
               author: authorName,
               aliases: aliasesString, // 别名
-              cover: item.image || item.images?.medium || item.images?.common || item.images?.small || null, // 优先 image (通常是主封面)
+              cover: item.image || item.images?.common || item.images?.medium || item.images?.small || null, // 优先 image (通常是主封面)
           };
       });
 
@@ -2067,8 +2086,6 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     if (matchedKeyword && !seriesMeta.tags.includes(matchedKeyword)) {
         seriesMeta.tags.push(matchedKeyword);
     }
-
-    seriesMeta.tags.push(btvData.platform);
 
     if (btvData.rating && typeof btvData.rating.score === 'number' && btvData.rating.score > 0) {
         seriesMeta.tags.push(`${Math.round(btvData.rating.score)}分`);
@@ -2173,12 +2190,16 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const seriesNameForDisplay = finalMeta.title || btvData.name_cn || btvData.name || '未知系列';
     await updateKomgaSeriesMeta(komgaSeriesId, seriesNameForDisplay, finalMeta);
 
+    // 匹配成功后，如果系列在手动匹配收藏夹中，则自动移除
+    await ensureManualMatchCollectionExists(); // 确保收藏夹ID已初始化
+    await removeSeriesFromManualMatchCollectionIfExists(komgaSeriesId, seriesNameForDisplay);
+
     // --- 获取系列和卷的多种封面尺寸 ---
     const seriesCoverUrls = [];
     if (btvData.images) { // 主条目的图片
         if (btvData.images.large) seriesCoverUrls.push(btvData.images.large);
-        if (btvData.images.medium) seriesCoverUrls.push(btvData.images.medium);
         if (btvData.images.common) seriesCoverUrls.push(btvData.images.common);
+        if (btvData.images.medium) seriesCoverUrls.push(btvData.images.medium);
         // if (btvData.images.small) seriesCoverUrls.push(btvData.images.small); // Usually too small
     }
     if (btvData.image && !seriesCoverUrls.includes(btvData.image)) { // `image` field is often the primary cover.
@@ -2212,8 +2233,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         const volCoverUrlsList = [];
         if (vol.images) {
             if (vol.images.large) volCoverUrlsList.push(vol.images.large);
-            if (vol.images.medium) volCoverUrlsList.push(vol.images.medium);
             if (vol.images.common) volCoverUrlsList.push(vol.images.common);
+            if (vol.images.medium) volCoverUrlsList.push(vol.images.medium);
         }
         if (vol.image && !volCoverUrlsList.includes(vol.image)) {
             volCoverUrlsList.unshift(vol.image);
@@ -2428,6 +2449,10 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
     let finalMeta = await filterSeriesMeta(komgaSeriesId, seriesMeta);
     finalMeta = Object.fromEntries(Object.entries(finalMeta).filter(([_, v]) => v !== null && v !== '' || Array.isArray(v) ));
     await updateKomgaSeriesMeta(komgaSeriesId, seriesNameForDisplay, finalMeta);
+
+    // 匹配成功后，如果系列在手动匹配收藏夹中，则自动移除
+    await ensureManualMatchCollectionExists(); // 确保收藏夹ID已初始化
+    await removeSeriesFromManualMatchCollectionIfExists(komgaSeriesId, seriesNameForDisplay);
 
     const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
     const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
@@ -2698,8 +2723,6 @@ async function batchMatchTarget(type, id, name) {
         return;
     }
 
-    let seriesToRemoveFromCollection = [];
-
     showBatchProgress(0, seriesObjects.length, batchStats);
 
     for (let i = 0; i < seriesObjects.length; i++) {
@@ -2720,9 +2743,6 @@ async function batchMatchTarget(type, id, name) {
             if (result.skipped) batchStats.skippedCount++;
             else if (result.success) {
                 batchStats.successCount++;
-                if (type === 'collection') {
-                    seriesToRemoveFromCollection.push(seriesObj.id);
-                }
             } else batchStats.failureCount++;
         } catch (err) {
             console.error(`[批量][${i + 1}/${seriesObjects.length}] 《${seriesName}》匹配出错:`, err);
@@ -2732,16 +2752,6 @@ async function batchMatchTarget(type, id, name) {
         showBatchProgress(i + 1, seriesObjects.length, batchStats);
 
         await new Promise(resolve => setTimeout(resolve, 300));
-    }
-
-    if (type === 'collection' && seriesToRemoveFromCollection.length > 0 && _manualMatchCollectionId) {
-        _manualMatchCollectionExistingSeriesIds = _manualMatchCollectionExistingSeriesIds.filter(id => !seriesToRemoveFromCollection.includes(id));
-        try {
-            await updateCollectionSeries(_manualMatchCollectionId, _manualMatchCollectionExistingSeriesIds);
-            console.info(`[收藏夹] 批量移除 ${seriesToRemoveFromCollection.length} 个系列完成`);
-        } catch (error) {
-            console.error(`[收藏夹] 批量移除系列失败:`, error);
-        }
     }
 
     hideBatchProgress();
