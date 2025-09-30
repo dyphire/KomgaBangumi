@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.5
+// @version      2.9.6
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1972,7 +1972,7 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
                                      parseInfobox(item.infobox, "原作") ||
                                      parseInfobox(item.infobox, "脚本");
               if (authorFromInfo) {
-                  authorName = authorFromInfo.split('、')[0].replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim(); // 取第一个作为主要作者
+                  authorName = authorFromInfo.split(/[、→・×]/)[0].replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim(); // 取第一个作为主要作者
               }
 
               // 提取并处理别名
@@ -2108,7 +2108,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     let publisherVal = parseInfobox(infobox, '出版社') || parseInfobox(infobox, '连载杂志') || parseInfobox(infobox, '制作');
     if (publisherVal) {
-        seriesMeta.publisher = t2s(publisherVal.split('、')[0].trim()); // Take first publisher, convert to simplified
+        seriesMeta.publisher = t2s(publisherVal.split(/[、→×]/)[0].trim()); // Take first publisher, convert to simplified
     } else if (matchedKeyword && !seriesMeta.publisher) {
         seriesMeta.publisher = matchedKeyword;
     }
@@ -2124,7 +2124,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let val = parseInfobox(infobox, key);
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
-            val.split('、').forEach(name => { // Handle multiple authors for the same role
+            val.split(/[、→・×]/).forEach(name => { // Handle multiple authors for the same role
                 const trimmedName = name.replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
@@ -2133,12 +2133,22 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
     }
     const hasWriter = resAuthors.some(a => a.role === 'writer');
+    const hasPenciller = resAuthors.some(a => a.role === 'penciller');
     if (!hasWriter) {
         const pencillers = resAuthors.filter(a => a.role === 'penciller');
         for (const p of pencillers) {
             const alreadyAdded = resAuthors.some(a => a.name === p.name && a.role === 'writer');
             if (!alreadyAdded) {
                 resAuthors.push({ name: p.name, role: 'writer' });
+            }
+        }
+    }
+    if (!hasPenciller && btvData.platform === '漫画') {
+        const writers = resAuthors.filter(a => a.role === 'writer');
+        for (const w of writers) {
+            const alreadyAdded = resAuthors.some(a => a.name === w.name && a.role === 'penciller');
+            if (!alreadyAdded) {
+                resAuthors.push({ name: w.name, role: 'penciller' });
             }
         }
     }
