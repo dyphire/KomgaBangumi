@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.6
+// @version      2.9.7
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1169,9 +1169,10 @@ async function asyncPool(items, asyncFn, limit = 5) {
     const ret = [];
     const executing = new Set();
 
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         // 调用异步函数，得到 Promise
-        const p = Promise.resolve().then(() => asyncFn(item));
+        const p = Promise.resolve().then(() => asyncFn(item, i));
         ret.push(p);
 
         // 添加到执行中集合
@@ -1985,7 +1986,7 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
               orititle: item.name, // 原始名
               author: authorName,
               aliases: aliasesString, // 别名
-              cover: item.image || item.images?.common || item.images?.medium || item.images?.small || null, // 优先 image (通常是主封面)
+              cover: item.image || item.images?.medium || item.images?.common || item.images?.small || null, // 优先 image (通常是主封面)
           };
       });
 
@@ -2206,8 +2207,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const seriesCoverUrls = [];
     if (btvData.images) { // 主条目的图片
         if (btvData.images.large) seriesCoverUrls.push(btvData.images.large);
-        if (btvData.images.common) seriesCoverUrls.push(btvData.images.common);
         if (btvData.images.medium) seriesCoverUrls.push(btvData.images.medium);
+        if (btvData.images.common) seriesCoverUrls.push(btvData.images.common);
         // if (btvData.images.small) seriesCoverUrls.push(btvData.images.small); // Usually too small
     }
     if (btvData.image && !seriesCoverUrls.includes(btvData.image)) { // `image` field is often the primary cover.
@@ -2237,19 +2238,19 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         });
 
     // 获取 volumeMates
-    const volumeMatesFetcher = async (vol) => {
+    const volumeMatesFetcher = async (vol, index) => {
         const volCoverUrlsList = [];
         if (vol.images) {
             if (vol.images.large) volCoverUrlsList.push(vol.images.large);
-            if (vol.images.common) volCoverUrlsList.push(vol.images.common);
             if (vol.images.medium) volCoverUrlsList.push(vol.images.medium);
+            if (vol.images.common) volCoverUrlsList.push(vol.images.common);
         }
         if (vol.image && !volCoverUrlsList.includes(vol.image)) {
             volCoverUrlsList.unshift(vol.image);
         }
         const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))];
     
-        let num = extractVolumeNumber(vol.name_cn || vol.name);
+        let num = extractVolumeNumber(vol.name_cn || vol.name) || (index + 1);
         // 判断当前卷号是否需要更新元数据
         const isNeedUpdate = needUpdateVolumeNums.has(num);
     
