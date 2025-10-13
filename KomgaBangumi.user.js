@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.7
+// @version      2.9.8
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -31,10 +31,12 @@ $('head').append(`
   </style>`);
 
 const maxReqBooks = 500;
-const sourceLabels = ['Btv', 'Bof']; // Btv now uses API
+const sourceLabels = ['Btv', 'Bof', 'Mangadex']; // Btv now uses API
 const btvApiUrl = 'https://api.bgm.tv';
 const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject links
 const bofUrl = 'https://bookof.moe';
+const mangadexUrl = 'https://mangadex.org';
+const mangadexApiUrl = 'https://api.mangadex.org';
 const tagLabels = '架空,搞笑,欢乐,欢乐向,热血,运动,恋爱,轻改,后宫,校园,青年,少年,少女,青年向,少年向,少女向,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行，异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,连载,连载中,完结,已完结,停刊,长期休载,停止连载,休刊';
 const equalLabels = ['治愈,治癒', '校园欺凌,校园霸凌', '轻改,轻小说改', '工口,色气,卖肉'];
 
@@ -646,7 +648,7 @@ function showBookSelectionPanel(seriesListRes) {
             }
             $selBookBtn.on('click', function (e) {
                 e.stopPropagation();
-                const seriesIdRes = parseInt($(this).attr('resSeriesId'));
+                const seriesIdRes = $(this).attr('resSeriesId');
                 $selBookPanel.remove(); // 关闭面板
                 resolve(seriesIdRes);   // 返回选择的 ID
             });
@@ -669,10 +671,11 @@ async function performSearchAndHandleResults(searchTerm, komgaSeriesId, $dom, se
             if (seriesListRes.length > 8) seriesListRes = seriesListRes.slice(0, 8); // Limit to 8 results + Cancel
             seriesListRes.push({ id: -1, title: '取消选择', author: '' }); // Add cancel option
             seriesIdRes = await showBookSelectionPanel(seriesListRes);
-            if (seriesIdRes === -1) { // User cancelled
+            if (seriesIdRes === "-1") { // User cancelled
                 showMessage('检索《' + searchTerm + '》已取消', 'warning');
                 return Promise.reject('Selection cancelled');
-            } else if (seriesIdRes > 0) { // Valid selection
+            } else if (seriesIdRes && seriesIdRes !== "-1") { // Valid selection
+                console.log('performSearchAndHandleResults: calling fetchBookByUrl with', komgaSeriesId, seriesIdRes, searchType);
                 partLoadingStart($dom);
                 // seriesIdRes is the ID from the external source (BTV or BOF)
                 await fetchBookByUrl(komgaSeriesId, seriesIdRes, '', searchType); // searchType is 'btv' or 'bof'
@@ -1112,7 +1115,7 @@ function asyncReq(url, method, data_ry = {}, headers = null, responseType = 'tex
 
         let requestUrl = url;
         // 为 GET 请求添加缓存清除参数，除非是不喜欢它的API (例如外部API)
-        if (method === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl)) {
+        if (method === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl) && !url.startsWith(mangadexApiUrl)) {
             requestUrl += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
         }
 
@@ -1492,6 +1495,17 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
 
             if (!blob || blob.size === 0) throw new Error("下载图片 blob 失败");
 
+            // 检查是否已存在相同大小的封面
+            const existingThumbsUrl = `${location.origin}/api/v1/books/${book.id}/thumbnails`;
+            const existingThumbsStr = await asyncReq(existingThumbsUrl, 'GET');
+            const existingThumbs = JSON.parse(existingThumbsStr);
+
+            const existingFileSizes = existingThumbs.map(thumb => thumb.fileSize);
+            if (existingFileSizes.includes(blob.size)) {
+                showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面已存在相同大小，跳过`, 'info');
+                return true; // 认为成功，因为已经存在
+            }
+
             if (blob.size >= 1024 * 1024) {
                 console.warn(`[updateKomgaBookCover] 跳过 ${imageSizeLabel} 封面，文件太大: ${blob.size} bytes`);
                 showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} ${imageSizeLabel} 封面太大(${(blob.size / 1024).toFixed(1)}kB)，跳过`, 'warning', 2000);
@@ -1836,6 +1850,7 @@ async function fetchBookByName(seriesName, source, limit = 8) {
       switch (source) {
         case 'btv': return await fetchBtvSubjectByNameAPI(seriesName, limit);
         case 'bof': return await fetchMoeBookByName(seriesName, limit); // Stays as is (scraping)
+        case 'mangadex': return await fetchMangadexBookByName(seriesName, limit);
         default:    return await fetchBtvSubjectByNameAPI(seriesName, limit);
       }
   } catch (error) {
@@ -1849,6 +1864,7 @@ async function fetchBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '', sou
     // reqSeriesId is the ID from BTV or BOF
     // reqSeriesUrl is if a direct URL was already known (e.g. from Komga links)
     source = source ? source.toLowerCase() : 'btv';
+    console.log('fetchBookByUrl called with source:', source);
     const $dom = findDomElementForSeries(komgaSeriesId) || $('body'); // Fallback to body for loading indicator if DOM not found
 
     try {
@@ -1859,13 +1875,16 @@ async function fetchBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '', sou
             case 'bof':
                 await fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl); // Stays as is (scraping)
                 break;
+            case 'mangadex':
+                await fetchMangadexBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl);
+                break;
             default:
                 await fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl);
                 break;
         }
     } catch (error) {
-         console.error(`[fetchBookByUrl] Overall error fetching/processing for KomgaID ${komgaSeriesId} from ${source.toUpperCase()}:`, error);
-         showMessage(`处理系列 ${komgaSeriesId} (${source.toUpperCase()}) 时发生错误: ${error.message || error}`, 'error', 10000);
+          console.error(`[fetchBookByUrl] Overall error fetching/processing for KomgaID ${komgaSeriesId} from ${source.toUpperCase()}:`, error);
+          showMessage(`处理系列 ${komgaSeriesId} (${source.toUpperCase()}) 时发生错误: ${error.message || error}`, 'error', 10000);
     } finally {
         partLoadingEnd($dom); // Ensure loading indicator is removed
     }
@@ -2431,12 +2450,12 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
             '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
             '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', '角川', '东贩',
             '集英', '讲谈社', '小学馆', 'bili', 'bilibili', '哔哩哔哩', '汉化', '生肉', '日版',
-            '原版', '正版', '官方', '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体', 
+            '原版', '正版', '官方', '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体',
         ];
 
         const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
         const seriesName = komgaSeries.name || '';
-        const matchedKeyword = publisherKeywords.find(keyword => 
+        const matchedKeyword = publisherKeywords.find(keyword =>
             t2s(seriesName).includes(keyword)
         );
 
@@ -2506,14 +2525,135 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
             await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bofBookVolumeCoverSets);
         } else {
             if (bookCoverFrameUrl) { // If frame URL existed but parsing failed
-                 showMessage(`《${seriesNameForDisplay}》未能从 BoF 封面数据中解析出有效封面链接`, 'warning');
+                  showMessage(`《${seriesNameForDisplay}》未能从 BoF 封面数据中解析出有效封面链接`, 'warning');
             }
             if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 即使没有封面，也可能需要更新作者
-                 await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+                  await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
             }
         }
     } else if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 'meta' only sync, but authors need update
         await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, []);
+    }
+}
+
+async function fetchMangadexBookByName(seriesName, limit = 8) {
+    const searchUrl = `${mangadexApiUrl}/manga?title=${encodeURIComponent(seriesName)}&limit=${limit}`;
+    try {
+        const searchResStr = await asyncReq(searchUrl, 'GET');
+        const searchRes = JSON.parse(searchResStr);
+
+        if (!searchRes || !searchRes.data || searchRes.data.length === 0) {
+            return [];
+        }
+
+        const results = searchRes.data.map(item => {
+            const title = item.attributes.altTitles?.find(alt => alt['zh'])?.['zh']
+                || item.attributes.altTitles?.find(alt => alt['zh-hk'])?.['zh-hk']
+                || item.attributes.altTitles?.find(alt => alt['zh-tw'])?.['zh-tw']
+                || item.attributes.altTitles?.find(alt => alt['ja'])?.['ja']
+                || item.attributes.title.en;
+            const orititle = item.attributes.altTitles?.find(alt => alt[item.attributes.originalLanguage])?.[item.attributes.originalLanguage]
+                || item.attributes.altTitles?.find(alt => alt['ja'])?.['ja'];
+            const aliases = item.attributes.title.en || item.attributes.altTitles?.find(alt => alt['en'])?.['en'];
+            const author = 'Unknown';
+
+            return {
+                id: item.id,
+                title: title,
+                orititle: orititle,
+                author: author,
+                aliases: aliases,
+            };
+        });
+
+        return results.slice(0, limit);
+    } catch (error) {
+        console.error(`[fetchMangadexBookByName] Failed for "${seriesName}":`, error);
+        if (error.message.includes('400')) {
+            showMessage('MangaDex 搜索失败，可能不支持中文标题，请尝试手动输入其他标题', 'warning');
+            return [];
+        }
+        throw error;
+    }
+}
+
+async function fetchMangadexBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') {
+    const mangaId = reqSeriesId;
+    const apiUrl = `${mangadexApiUrl}/manga/${mangaId}`;
+    showMessage('正在从 Mangadex 获取封面数据...', 'info');
+    try {
+        const mangaResStr = await asyncReq(apiUrl, 'GET');
+        const mangaData = JSON.parse(mangaResStr);
+
+        const seriesNameForDisplay = mangaData.data.attributes.altTitles?.find(alt => alt['zh'])?.['zh']
+            || mangaData.data.attributes.altTitles?.find(alt => alt['zh-hk'])?.['zh-hk']
+            || mangaData.data.attributes.altTitles?.find(alt => alt['ja'])?.['ja']
+            || mangaData.data.attributes.title.en;
+
+        const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
+        if (fetchSeriesType === 'all') {
+            // 获取系列封面
+            const coverRel = mangaData.data.relationships.find(rel => rel.type === 'cover_art');
+            let seriesCoverUrls = [];
+            if (coverRel) {
+                const coverId = coverRel.id;
+                const coverApiUrl = `${mangadexApiUrl}/cover/${coverId}`;
+                const coverResStr = await asyncReq(coverApiUrl, 'GET');
+                const coverData = JSON.parse(coverResStr);
+                const baseUrl = `${mangadexUrl}/covers/${mangaId}/${coverData.data.attributes.fileName}`;
+                seriesCoverUrls.push(baseUrl); // 原图
+                seriesCoverUrls.push(baseUrl + '.512.jpg'); // 中图
+                seriesCoverUrls.push(baseUrl + '.256.jpg'); // 小图
+            }
+
+            // 获取所有封面用于卷封面
+            const covers = [];
+            let offset = 0;
+            const limit = 100;
+            while (true) {
+                const coversUrl = `${mangadexApiUrl}/cover?manga[]=${mangaId}&limit=${limit}&offset=${offset}`;
+                const coversResStr = await asyncReq(coversUrl, 'GET');
+                const coversData = JSON.parse(coversResStr);
+                covers.push(...coversData.data);
+                if (coversData.data.length < limit) break;
+                offset += limit;
+            }
+
+            // 只取locale为"ja"的封面
+            const jaCovers = covers.filter(cover => cover.attributes.locale === 'ja');
+
+            const coverMap = {};
+            jaCovers.forEach(cover => {
+                const vol = cover.attributes.volume || '0';
+                const url = `${mangadexUrl}/covers/${mangaId}/${cover.attributes.fileName}`;
+                if (!coverMap[vol]) coverMap[vol] = [];
+                coverMap[vol].push(url); // 原图
+                coverMap[vol].push(url + '.512.jpg'); // 中图
+                coverMap[vol].push(url + '.256.jpg'); // 小图
+            });
+
+            const sortedVols = Object.keys(coverMap).sort((a, b) => parseFloat(a) - parseFloat(b));
+
+            const volumeMates = sortedVols.map(vol => ({
+                num: vol,
+                coverUrls: coverMap[vol]
+            }));
+
+            const bookVolumeCoverSets = sortedVols.map(vol => ({ coverUrls: coverMap[vol] }));
+
+            const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
+
+            if (seriesCoverUrls.length > 0) {
+                await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, seriesCoverUrls);
+            }
+
+            await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, null, bookVolumeCoverSets, volumeMates);
+        } else {
+            showMessage('Mangadex 只支持更新封面', 'warning');
+        }
+    } catch (error) {
+        console.error(`[fetchMangadexBookByUrl] Failed for ${mangaId}:`, error);
+        showMessage(`Mangadex 获取失败: ${error.message}`, 'error');
     }
 }
 //</editor-fold>
@@ -2530,7 +2670,10 @@ async function search(komgaSeriesId, $dom) {
     const komgaMetaLinks = komgaMeta?.links || []; // Handle if komgaMeta is null
 
     const $selSourcePanel = $('<div></div>').css({ ...selPanelStyle });
+    const syncType = localStorage.getItem(`SID-${komgaSeriesId}`);
     sourceLabels.forEach((label) => { // 'Btv', 'Bof'
+        // Hide Mangadex if not 'all' mode
+        if (label === 'Mangadex' && syncType !== 'all') return;
         const $selSourceBtn = $('<button></button>')
             .append('<div>' + label + '</div>')
             .attr('sourceLabel', label).css({ ...selPanelBtnStyle });
@@ -2586,6 +2729,7 @@ async function search(komgaSeriesId, $dom) {
         .on('click', function (e) {
             e.stopPropagation();
             $selSourcePanel.remove();
+            partLoadingEnd($dom);
             showMessage('操作已取消', 'warning');
         });
     $selSourcePanel.append($cancelBtn);
