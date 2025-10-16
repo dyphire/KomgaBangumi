@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.9
+// @version      2.9.10
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -975,52 +975,6 @@ function extractAndNormalizeTitle(str) {
         .toLowerCase();
 }
 
-function chineseToArabic(chineseNum) {
-    const cnNums = {
-        '零': 0, '〇': 0,
-        '一': 1, '二': 2, '两': 2, '俩': 2,
-        '三': 3, '四': 4, '五': 5,
-        '六': 6, '七': 7, '八': 8,
-        '九': 9,
-    };
-    const cnUnits = {
-        '十': 10,
-        '百': 100,
-        '千': 1000,
-    };
-
-    let result = 0;
-    let unit = 1;     // 当前单位，默认是个位
-    let section = 0;  // 当前节的累加结果
-    let number = 0;   // 当前数字
-    let str = chineseNum.split('');
-
-    for (let i = str.length - 1; i >= 0; i--) {
-        const char = str[i];
-        if (cnUnits[char]) {
-            unit = cnUnits[char];
-            // 如果前面没有数字，比如“十二”，默认前面是1
-            if (number === 0) {
-                number = 1;
-            }
-            section += number * unit;
-            number = 0;
-            unit = 1;
-        } else if (cnNums.hasOwnProperty(char)) {
-            number = cnNums[char];
-            if (i === 0) {
-                // 如果是首字符是数字，要乘上当前单位
-                section += number * unit;
-            }
-        } else {
-            return NaN; // 非法字符
-        }
-    }
-
-    result += section;
-    return result;
-}
-
 // 辅助函数：规范化日期字符串
 function normalizeDate(dateStr) {
     if (!dateStr) return undefined;
@@ -1589,7 +1543,7 @@ async function updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesName, bookAu
 
     if (!bookUpdateNeeded && !coverUpdateNeeded) return;
 
-    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊|第)(?!.*(?:话|話|章|回|迴|篇|期|辑|輯|节|節|页|頁|部))[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册|冊|集)?/i;
+    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊)[\W_]*?(?<volNum>\d+)|第\s*(?<volNum2>\d+)\s*(?:巻|卷|册|冊|集)|(?<volNum3>\d+)\s*(?:巻|卷|册|冊|集)/i;
 
     for (let i = 0; i < booksToProcess.length; i++) {
         const book = booksToProcess[i];
@@ -1599,9 +1553,9 @@ async function updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesName, bookAu
 
         // 用正则提取卷号数字
         const match = bookname.match(volumeTitlePattern) || booktitle.match(volumeTitlePattern);
-        if (match?.groups?.volNum) {
-            const volStr = match.groups.volNum;
-            volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : chineseToArabic(volStr);
+        if (match?.groups?.volNum || match?.groups?.volNum2 || match?.groups?.volNum3) {
+            const volStr = match.groups.volNum || match.groups.volNum2 || match.groups.volNum3;
+            volNum = parseInt(volStr, 10);
         }
 
         const bookNumberForDisplay = volNum.toString().padStart(2, '0');
@@ -1695,7 +1649,7 @@ function ifUpdateBook(seriesBooks, bookAuthors) {
 function getVolumeNumsNeedUpdate(seriesBooks) {
     if (!seriesBooks || !seriesBooks.content || seriesBooks.content.length === 0) return new Set();
 
-    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊|第)(?!.*(?:话|話|章|回|迴|篇|期|辑|輯|节|節|页|頁|部))[\W_]*?(?<volNum>\d+|[一二三四五六七八九十百千零〇两俩]+)\s*(?:巻|卷|册|冊|集)?/i;
+    const volumeTitlePattern = /(?:vol(?:ume)?s?|巻|卷|册|冊)[\W_]*?(?<volNum>\d+)|第\s*(?<volNum2>\d+)\s*(?:巻|卷|册|冊|集)|(?<volNum3>\d+)\s*(?:巻|卷|册|冊|集)/i;
     const needUpdateVolumeNums = new Set();
 
     for (const book of seriesBooks.content) {
@@ -1704,7 +1658,7 @@ function getVolumeNumsNeedUpdate(seriesBooks) {
         if (!volumeTitlePattern.test(title)) continue;
 
         const match = title.match(volumeTitlePattern);
-        const volNum = match?.groups?.volNum || null;
+        const volNum = match?.groups?.volNum || match?.groups?.volNum2 || match?.groups?.volNum3 || null;
 
         if (!volNum) continue;
 
