@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.8
+// @version      2.9.9
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -723,11 +723,12 @@ function extractSeriesTitles(seriesName, limitCount) {
     );
 
     const minimalProcessedTitle = t2s(seriesName
+        .replace(/[\(\[【（]?境外版[\)\]】）]?\s*/g, '')
+        .replace(/[\(\[【（]?单行本[\)\]】）]?\s*$/g, '')
+        .replace(/[\(\[【（]?\d+卷[\)\]】）]?\s*$/g, '')
         .replace(/\[.*?\]/g, '')
         .replace(/【.*?】/g, '')
         .replace(/[（()）]/g, ' ')
-        .replace(/[\(\[【（]?单行本[\)\]】）]?\s*$/g, '')
-        .replace(/[\(\[【（]?\d+卷[\)\]】）]?\s*$/g, '')
         .replace(/[_-]?\s*$/g, '')
         .trim()
     );
