@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.10
+// @version      2.9.11
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -46,6 +46,7 @@ const defaultReqHeaders = { // Renamed to avoid conflict with local var 'default
 
 const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
 const BANGUMI_MATCH_TYPE_KEY = "bangumi_match_type"; // 用于存储匹配类型的键名
+const VOLUME_DATA_FETCH_KEY = 'komga_volume_data_fetch'; // 用于存储是否获取单行本数据的键名
 
 const bangumiApiHeaders = {
     'User-Agent': `${GM_info.script.name}/${GM_info.script.version} (UserScript; ${GM_info.script.namespace})`,
@@ -58,49 +59,14 @@ function getBangumiAccessToken() {
     return GM_getValue(BANGUMI_ACCESS_TOKEN_KEY, null);
 }
 
-// 通过提示框设置/更新Bangumi Access Token
-function setBangumiAccessToken() {
-    const currentToken = getBangumiAccessToken();
-    const newToken = prompt(
-        "请输入您的 Bangumi API Access Token (用于提高请求频率或访问 NSFW 条目)。\n留空并确定则清除已保存的 Token。\n\n你可以在 https://next.bgm.tv/demo/access-token 生成一个 Access Token",
-        currentToken || ""
-    );
-
-    if (newToken !== null) { // 用户按了确定，而不是取消
-        if (newToken.trim() === "") {
-            GM_deleteValue(BANGUMI_ACCESS_TOKEN_KEY);
-            showMessage("Bangumi Access Token 已清除。", "info");
-        } else {
-            GM_setValue(BANGUMI_ACCESS_TOKEN_KEY, newToken.trim());
-            showMessage("Bangumi Access Token 已保存。", "success");
-        }
-    } else {
-        showMessage("设置Bangumi Access Token操作已取消。", "warning");
-    }
-}
-
 // 读取匹配类型，默认返回"漫画"
 function getBangumiMatchType() {
     return GM_getValue(BANGUMI_MATCH_TYPE_KEY, "漫画");
 }
 
-// 通过提示框设置/更新匹配类型
-async function setBangumiMatchType() {
-    const currentType = getBangumiMatchType();
-
-    const result = await customConfirm(
-        `当前匹配类型是：${currentType}\n请选择匹配类型：`,
-        "漫画",
-        "小说"
-    );
-
-    if (result === "keep") {
-        return;
-    }
-
-    const newType = result === "confirm" ? "漫画" : "小说";
-    GM_setValue(BANGUMI_MATCH_TYPE_KEY, newType);
-    showMessage(`匹配类型已设置为：${newType}`, "success");
+// 读取是否获取单行本数据，默认 false
+function getVolumeDataFetch() {
+    return GM_getValue(VOLUME_DATA_FETCH_KEY, false);
 }
 
 // 定义常用样式
@@ -196,8 +162,8 @@ const $msgBoxes = $('<div>').attr('id', 'msg-boxes').css({
   'z-index': '10000',
 });
 
-// 自定义确认弹窗
-function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
+// 自定义设置弹窗
+function showSettingsDialog() {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -214,22 +180,25 @@ function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
         const dialog = document.createElement("div");
         dialog.style.cssText = `
             position: relative;
-            max-width: 320px;
+            max-width: 500px;
             width: 90%;
             padding: 20px 30px;
             border-radius: 12px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-            text-align: center;
+            text-align: left;
             user-select: none;
             transition: background-color 0.3s, color 0.3s;
+            max-height: 80vh;
+            overflow-y: auto;
         `;
 
-        const textElem = document.createElement("div");
-        textElem.textContent = title;
-        textElem.style.cssText = `
-            font-size: 18px;
-            margin-bottom: 24px;
-            white-space: pre-wrap;
+        const titleElem = document.createElement("div");
+        titleElem.textContent = "设置";
+        titleElem.style.cssText = `
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-align: center;
         `;
 
         // 关闭按钮
@@ -248,11 +217,71 @@ function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
             transition: color 0.2s;
         `;
 
+        const content = document.createElement("div");
+        content.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        `;
+
+        // 匹配类型设置
+        const matchTypeSection = document.createElement("div");
+        const matchTypeLabel = document.createElement("div");
+        matchTypeLabel.textContent = "匹配类型：";
+        matchTypeLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const matchTypeSelect = document.createElement("select");
+        matchTypeSelect.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        const mangaOption = document.createElement("option");
+        mangaOption.value = "漫画";
+        mangaOption.textContent = "漫画";
+        const novelOption = document.createElement("option");
+        novelOption.value = "小说";
+        novelOption.textContent = "小说";
+        matchTypeSelect.appendChild(mangaOption);
+        matchTypeSelect.appendChild(novelOption);
+        matchTypeSection.appendChild(matchTypeLabel);
+        matchTypeSection.appendChild(matchTypeSelect);
+
+        // Access Token 设置
+        const tokenSection = document.createElement("div");
+        const tokenLabel = document.createElement("div");
+        tokenLabel.textContent = "Bangumi Access Token：";
+        tokenLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const tokenInput = document.createElement("input");
+        tokenInput.type = "text";
+        tokenInput.placeholder = "留空则清除";
+        tokenInput.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        tokenSection.appendChild(tokenLabel);
+        tokenSection.appendChild(tokenInput);
+
+        // 获取单行本数据设置
+        const volumeDataSection = document.createElement("div");
+        const volumeDataLabel = document.createElement("div");
+        volumeDataLabel.textContent = "是否获取单行本数据：";
+        volumeDataLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const volumeDataSelect = document.createElement("select");
+        volumeDataSelect.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        const yesOption = document.createElement("option");
+        yesOption.value = "true";
+        yesOption.textContent = "是";
+        const noOption = document.createElement("option");
+        noOption.value = "false";
+        noOption.textContent = "否";
+        volumeDataSelect.appendChild(yesOption);
+        volumeDataSelect.appendChild(noOption);
+        volumeDataSection.appendChild(volumeDataLabel);
+        volumeDataSection.appendChild(volumeDataSelect);
+
+        content.appendChild(matchTypeSection);
+        content.appendChild(volumeDataSection);
+        content.appendChild(tokenSection);
+
         const btnContainer = document.createElement("div");
         btnContainer.style.cssText = `
             display: flex;
             justify-content: space-around;
             gap: 20px;
+            margin-top: 20px;
         `;
 
         function styleButton(btn) {
@@ -268,13 +297,13 @@ function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
             `;
         }
 
-        const btn1 = document.createElement("button");
-        btn1.textContent = btn1Text;
-        styleButton(btn1);
+        const saveBtn = document.createElement("button");
+        saveBtn.textContent = "保存";
+        styleButton(saveBtn);
 
-        const btn2 = document.createElement("button");
-        btn2.textContent = btn2Text;
-        styleButton(btn2);
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "取消";
+        styleButton(cancelBtn);
 
         const darkTheme = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
@@ -283,60 +312,121 @@ function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
 
             dialog.style.backgroundColor = "#222";
             dialog.style.color = "#eee";
-            dialog.style.boxShadow = "0 8px 24px rgba(0,0,0,0.8)";
 
             closeBtn.style.color = "#ccc";
             closeBtn.onmouseenter = () => (closeBtn.style.color = "#fff");
             closeBtn.onmouseleave = () => (closeBtn.style.color = "#ccc");
 
-            btn1.style.backgroundColor = "#388e3c";
-            btn1.style.color = "#fff";
-            btn1.onmouseenter = () => (btn1.style.backgroundColor = "#2e7d32");
-            btn1.onmouseleave = () => (btn1.style.backgroundColor = "#388e3c");
+            saveBtn.style.backgroundColor = "#388e3c";
+            saveBtn.style.color = "#fff";
+            saveBtn.onmouseenter = () => (saveBtn.style.backgroundColor = "#2e7d32");
+            saveBtn.onmouseleave = () => (saveBtn.style.backgroundColor = "#388e3c");
 
-            btn2.style.backgroundColor = "#d32f2f";
-            btn2.style.color = "#fff";
-            btn2.onmouseenter = () => (btn2.style.backgroundColor = "#b71c1c");
-            btn2.onmouseleave = () => (btn2.style.backgroundColor = "#d32f2f");
+            cancelBtn.style.backgroundColor = "#d32f2f";
+            cancelBtn.style.color = "#fff";
+            cancelBtn.onmouseenter = () => (cancelBtn.style.backgroundColor = "#b71c1c");
+            cancelBtn.onmouseleave = () => (cancelBtn.style.backgroundColor = "#d32f2f");
+
+            matchTypeSelect.style.backgroundColor = "#333";
+            matchTypeSelect.style.color = "#fff";
+            matchTypeSelect.style.border = "1px solid #666";
+            volumeDataSelect.style.backgroundColor = "#333";
+            volumeDataSelect.style.color = "#fff";
+            volumeDataSelect.style.border = "1px solid #666";
+            tokenInput.style.backgroundColor = "#333";
+            tokenInput.style.color = "#fff";
+            tokenInput.style.border = "1px solid #666";
         } else {
             // 浅色主题
             overlay.style.backgroundColor = "rgba(0,0,0,0.5)";
 
             dialog.style.backgroundColor = "#fff";
             dialog.style.color = "#333";
-            dialog.style.boxShadow = "0 8px 24px rgba(0,0,0,0.2)";
 
             closeBtn.style.color = "#666";
             closeBtn.onmouseenter = () => (closeBtn.style.color = "#000");
             closeBtn.onmouseleave = () => (closeBtn.style.color = "#666");
 
-            btn1.style.backgroundColor = "#4caf50";
-            btn1.style.color = "white";
-            btn1.onmouseenter = () => (btn1.style.backgroundColor = "#45a049");
-            btn1.onmouseleave = () => (btn1.style.backgroundColor = "#4caf50");
+            saveBtn.style.backgroundColor = "#4caf50";
+            saveBtn.style.color = "white";
+            saveBtn.onmouseenter = () => (saveBtn.style.backgroundColor = "#45a049");
+            saveBtn.onmouseleave = () => (saveBtn.style.backgroundColor = "#4caf50");
 
-            btn2.style.backgroundColor = "#f44336";
-            btn2.style.color = "white";
-            btn2.onmouseenter = () => (btn2.style.backgroundColor = "#e53935");
-            btn2.onmouseleave = () => (btn2.style.backgroundColor = "#f44336");
+            cancelBtn.style.backgroundColor = "#f44336";
+            cancelBtn.style.color = "white";
+            cancelBtn.onmouseenter = () => (cancelBtn.style.backgroundColor = "#e53935");
+            cancelBtn.onmouseleave = () => (cancelBtn.style.backgroundColor = "#f44336");
+
+            matchTypeSelect.style.backgroundColor = "#fff";
+            matchTypeSelect.style.color = "#333";
+            matchTypeSelect.style.border = "1px solid #ccc";
+            volumeDataSelect.style.backgroundColor = "#fff";
+            volumeDataSelect.style.color = "#333";
+            volumeDataSelect.style.border = "1px solid #ccc";
+            tokenInput.style.backgroundColor = "#fff";
+            tokenInput.style.color = "#333";
+            tokenInput.style.border = "1px solid #ccc";
         }
+
+        // 初始化当前值
+        const currentMatchType = getBangumiMatchType();
+        const currentToken = getBangumiAccessToken();
+        const currentVolumeFetch = getVolumeDataFetch();
+
+        matchTypeSelect.value = currentMatchType;
+        tokenInput.value = currentToken || "";
+        volumeDataSelect.value = currentVolumeFetch.toString();
 
         closeBtn.onclick = () => {
             cleanup();
-            resolve("keep");
+            resolve("cancel");
         };
 
-        const btn1Click = () => {
+        saveBtn.onclick = () => {
+            const newMatchType = matchTypeSelect.value;
+            const newToken = tokenInput.value.trim();
+            const newVolumeFetch = volumeDataSelect.value === "true";
+
+            const currentMatchType = getBangumiMatchType();
+            const currentToken = getBangumiAccessToken();
+            const currentVolumeFetch = getVolumeDataFetch();
+
+            let messages = [];
+
+            if (newMatchType !== currentMatchType) {
+                GM_setValue(BANGUMI_MATCH_TYPE_KEY, newMatchType);
+                messages.push(`匹配类型: ${newMatchType}`);
+            }
+
+            if (newToken !== currentToken) {
+                if (newToken === "") {
+                    GM_deleteValue(BANGUMI_ACCESS_TOKEN_KEY);
+                    messages.push("Bangumi Access Token 已清除");
+                } else {
+                    GM_setValue(BANGUMI_ACCESS_TOKEN_KEY, newToken);
+                    messages.push("Bangumi Access Token 已保存");
+                }
+            }
+
+            if (newVolumeFetch !== currentVolumeFetch) {
+                GM_setValue(VOLUME_DATA_FETCH_KEY, newVolumeFetch);
+                messages.push(`获取单行本数据: ${newVolumeFetch ? "是" : "否"}`);
+            }
+
+            if (messages.length > 0) {
+                showMessage(`设置已保存。${messages.join(", ")}`, "success");
+            } else {
+                showMessage("设置未修改。", "info");
+            }
+
             cleanup();
-            resolve("confirm");
+            resolve("save");
         };
-        btn1.onclick = btn1Click;
 
-        const btn2Click = () => {
+        cancelBtn.onclick = () => {
             cleanup();
             resolve("cancel");
         };
-        btn2.onclick = btn2Click;
 
         function cleanup() {
             document.body.removeChild(overlay);
@@ -346,15 +436,16 @@ function customConfirm(title, btn1Text = "确定", btn2Text = "取消") {
         function keyListener(e) {
             if (e.key === "Escape") {
                 cleanup();
-                resolve("keep");
+                resolve("cancel");
             }
         }
         document.addEventListener("keydown", keyListener);
 
-        btnContainer.appendChild(btn1);
-        btnContainer.appendChild(btn2);
+        btnContainer.appendChild(saveBtn);
+        btnContainer.appendChild(cancelBtn);
         dialog.appendChild(closeBtn);
-        dialog.appendChild(textElem);
+        dialog.appendChild(titleElem);
+        dialog.appendChild(content);
         dialog.appendChild(btnContainer);
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
@@ -1882,7 +1973,7 @@ function extractAliases(infoboxArray) {
                 aliases.add(item.value.v.trim());
             }
         }
-        
+
         // 2. 处理嵌套别名项（支持简体和繁体）
         if (Array.isArray(item.value)) {
             for (const subItem of item.value) {
@@ -1890,7 +1981,7 @@ function extractAliases(infoboxArray) {
                 const isSubAlias = subItem?.k === "别名" || subItem?.k === "別名";
                 if (isSubAlias && typeof subItem.v === "string") {
                     aliases.add(subItem.v.trim());
-                } 
+                }
                 // 处理嵌套的别名数组
                 else if (isSubAlias && Array.isArray(subItem.v)) {
                     subItem.v.forEach(alias => {
@@ -1904,7 +1995,7 @@ function extractAliases(infoboxArray) {
             }
         }
     }
-    
+
     return Array.from(aliases).filter(a => a).join(" / ");
 }
 
@@ -2002,7 +2093,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
       .map(line => line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''))  // 去除每行前后空格（含全角空格）
       .join('\n')
       .trim();
-  
+
     seriesMeta.totalBookCount = btvData.volumes || btvData.eps || btvData.total_episodes || null;
 
     seriesMeta.genres = komgaSeries.genres || [];
@@ -2049,13 +2140,13 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     // 追加识别系列文件夹名称中的出版社/汉化信息
     const publisherKeywords = [
         '台湾角川', '台湾东贩', '尖端', '青文', '东立', '长鸿', '尚禾', '大然', '龙成',
-        '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', 'bili', 
+        '群英', '未来数位', '新视界', '玉皇朝', '天下', '传信', '天闻角川', 'bili',
         'bilibili', '哔哩哔哩', '汉化', '生肉', '日版', '原版', '正版', '官方',
         '中文版',  '简中', '繁中', '简体中文', '繁体中文', '简体', '繁体',
     ];
 
     const seriesName = komgaSeries.name || '';
-    const matchedKeyword = publisherKeywords.find(keyword => 
+    const matchedKeyword = publisherKeywords.find(keyword =>
         t2s(seriesName).includes(keyword)
     );
 
@@ -2083,14 +2174,14 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     let publisherVal = parseInfobox(infobox, '出版社') || parseInfobox(infobox, '连载杂志') || parseInfobox(infobox, '制作');
     if (publisherVal) {
-        seriesMeta.publisher = t2s(publisherVal.split(/[、→×]/)[0].trim()); // Take first publisher, convert to simplified
+        seriesMeta.publisher = t2s(publisherVal.split(/[/、→×]/)[0].trim()); // Take first publisher, convert to simplified
     } else if (matchedKeyword && !seriesMeta.publisher) {
         seriesMeta.publisher = matchedKeyword;
     }
 
     // Define author roles mapping for Komga
     const authorRoles = {
-        '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '脚本': 'writer', '漫画家': 'writer', 
+        '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '脚本': 'writer', '漫画家': 'writer',
         '作画': 'penciller', '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
         '原案': 'story', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
         // Add more roles as needed and map them to Komga's supported roles
@@ -2099,7 +2190,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let val = parseInfobox(infobox, key);
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
-            val.split(/[、→・×]/).forEach(name => { // Handle multiple authors for the same role
+            val.split(/[/、→・×]/).forEach(name => { // Handle multiple authors for the same role
                 const trimmedName = name.replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
@@ -2194,6 +2285,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
     const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBook(seriesBooks, finalMeta.authors);
     const needUpdateVolumeNums = getVolumeNumsNeedUpdate(seriesBooks);
+    const needFetchVolumeData = getVolumeDataFetch();
 
     // 过滤单行本卷，排序
     const relatedSubjectsApiUrl = `${btvApiUrl}/v0/subjects/${subjectId}/subjects`;
@@ -2223,36 +2315,36 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
             volCoverUrlsList.unshift(vol.image);
         }
         const uniqueVolCoverUrls = [...new Set(volCoverUrlsList.filter(Boolean))];
-    
+
         let num = extractVolumeNumber(vol.name_cn || vol.name) || (index + 1);
         // 判断当前卷号是否需要更新元数据
         const isNeedUpdate = needUpdateVolumeNums.has(num);
-    
+
         let summary = '', releaseDate = '', isbn = '';
-        if (isNeedUpdate) {
+        if (isNeedUpdate && needFetchVolumeData) {
             try {
                 const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
                 const volDetail = JSON.parse(volDetailStr);
-    
+
                 summary = (volDetail.summary || '')
                     .replace(/\r\n|\r/g, '\n')
                     .split('\n')
                     .map(line => line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''))
                     .join('\n')
                     .trim();
-    
+
                 const dateStr = parseInfobox(volDetail.infobox || [], '发售日') || parseInfobox(volDetail.infobox || [], '放送开始');
                 if (dateStr) {
                     releaseDate = normalizeDate(dateStr);
                 }
-    
+
                 const isbnVal = parseInfobox(volDetail.infobox || [], 'ISBN');
                 if (isbnVal) isbn = isbnVal;
             } catch (e) {
                 console.warn(`[BtvAPI] 获取单行本详情失败 (${vol.id}):`, e);
             }
         }
-    
+
         return {
             num,
             summary,
@@ -2261,7 +2353,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
             coverUrls: uniqueVolCoverUrls,
         };
     };
-    
+
     const volumeMatesWithCovers = await asyncPool(volumes, volumeMatesFetcher, 10);
     const bookVolumeCoverSets = volumeMatesWithCovers.map(v => ({ coverUrls: v.coverUrls }));
     let volumeMates = volumeMatesWithCovers.map(({ coverUrls, ...meta }) => meta);
@@ -2805,7 +2897,7 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
 
     if ($domForLoading) partLoadingEnd($domForLoading);
     return matchResult;
-}               
+}
 
 async function batchMatchTarget(type, id, name) {
     showMessage(`开始对 ${name} 中的系列批量精确匹配...`, 'info', 3000);
@@ -3021,8 +3113,7 @@ function main() {
     loadMessage();
 
     if (typeof GM_registerMenuCommand === "function") {
-        GM_registerMenuCommand("选择匹配类型（漫画/小说）", setBangumiMatchType);
-        GM_registerMenuCommand('设置Bangumi Access Token', setBangumiAccessToken, 'B');
+        GM_registerMenuCommand("设置", showSettingsDialog);
     }
 
     console.log("KomgaBangumi main execution finished setting up.");
