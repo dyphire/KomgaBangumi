@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.11
+// @version      2.9.12
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2174,7 +2174,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     let publisherVal = parseInfobox(infobox, '出版社') || parseInfobox(infobox, '连载杂志') || parseInfobox(infobox, '制作');
     if (publisherVal) {
-        seriesMeta.publisher = t2s(publisherVal.split(/[/、→×]/)[0].trim()); // Take first publisher, convert to simplified
+        seriesMeta.publisher = t2s(publisherVal.split(/[/／、_→×&,，]/)[0].trim()); // Take first publisher, convert to simplified
     } else if (matchedKeyword && !seriesMeta.publisher) {
         seriesMeta.publisher = matchedKeyword;
     }
@@ -2190,7 +2190,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let val = parseInfobox(infobox, key);
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
-            val.split(/[/、→・×]/).forEach(name => { // Handle multiple authors for the same role
+            val.split(/[/／、_→・×&,，]/).forEach(name => { // Handle multiple authors for the same role
                 const trimmedName = name.replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
