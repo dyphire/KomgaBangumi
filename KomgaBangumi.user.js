@@ -47,6 +47,7 @@ const defaultReqHeaders = { // Renamed to avoid conflict with local var 'default
 const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
 const BANGUMI_MATCH_TYPE_KEY = "bangumi_match_type"; // 用于存储匹配类型的键名
 const VOLUME_DATA_FETCH_KEY = 'komga_volume_data_fetch'; // 用于存储是否获取单行本数据的键名
+const CBL_LINK_COPY_KEY = 'komga_cbl_link_copy'; // 用于存储是否复制Btv链接为cbl的键名
 
 const bangumiApiHeaders = {
     'User-Agent': `${GM_info.script.name}/${GM_info.script.version} (UserScript; ${GM_info.script.namespace})`,
@@ -67,6 +68,11 @@ function getBangumiMatchType() {
 // 读取是否获取单行本数据，默认 false
 function getVolumeDataFetch() {
     return GM_getValue(VOLUME_DATA_FETCH_KEY, false);
+}
+
+// 读取是否复制Btv链接为cbl，默认 false
+function getCblLinkCopy() {
+    return GM_getValue(CBL_LINK_COPY_KEY, false);
 }
 
 // 定义常用样式
@@ -272,8 +278,27 @@ function showSettingsDialog() {
         volumeDataSection.appendChild(volumeDataLabel);
         volumeDataSection.appendChild(volumeDataSelect);
 
+        // 复制Btv链接为cbl设置
+        const cblLinkSection = document.createElement("div");
+        const cblLinkLabel = document.createElement("div");
+        cblLinkLabel.textContent = "是否复制Btv链接为cbl：";
+        cblLinkLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const cblLinkSelect = document.createElement("select");
+        cblLinkSelect.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        const cblYesOption = document.createElement("option");
+        cblYesOption.value = "true";
+        cblYesOption.textContent = "是";
+        const cblNoOption = document.createElement("option");
+        cblNoOption.value = "false";
+        cblNoOption.textContent = "否";
+        cblLinkSelect.appendChild(cblYesOption);
+        cblLinkSelect.appendChild(cblNoOption);
+        cblLinkSection.appendChild(cblLinkLabel);
+        cblLinkSection.appendChild(cblLinkSelect);
+
         content.appendChild(matchTypeSection);
         content.appendChild(volumeDataSection);
+        content.appendChild(cblLinkSection);
         content.appendChild(tokenSection);
 
         const btnContainer = document.createElement("div");
@@ -333,6 +358,9 @@ function showSettingsDialog() {
             volumeDataSelect.style.backgroundColor = "#333";
             volumeDataSelect.style.color = "#fff";
             volumeDataSelect.style.border = "1px solid #666";
+            cblLinkSelect.style.backgroundColor = "#333";
+            cblLinkSelect.style.color = "#fff";
+            cblLinkSelect.style.border = "1px solid #666";
             tokenInput.style.backgroundColor = "#333";
             tokenInput.style.color = "#fff";
             tokenInput.style.border = "1px solid #666";
@@ -363,6 +391,9 @@ function showSettingsDialog() {
             volumeDataSelect.style.backgroundColor = "#fff";
             volumeDataSelect.style.color = "#333";
             volumeDataSelect.style.border = "1px solid #ccc";
+            cblLinkSelect.style.backgroundColor = "#fff";
+            cblLinkSelect.style.color = "#333";
+            cblLinkSelect.style.border = "1px solid #ccc";
             tokenInput.style.backgroundColor = "#fff";
             tokenInput.style.color = "#333";
             tokenInput.style.border = "1px solid #ccc";
@@ -372,10 +403,12 @@ function showSettingsDialog() {
         const currentMatchType = getBangumiMatchType();
         const currentToken = getBangumiAccessToken();
         const currentVolumeFetch = getVolumeDataFetch();
+        const currentCblCopy = getCblLinkCopy();
 
         matchTypeSelect.value = currentMatchType;
         tokenInput.value = currentToken || "";
         volumeDataSelect.value = currentVolumeFetch.toString();
+        cblLinkSelect.value = currentCblCopy.toString();
 
         closeBtn.onclick = () => {
             cleanup();
@@ -386,10 +419,12 @@ function showSettingsDialog() {
             const newMatchType = matchTypeSelect.value;
             const newToken = tokenInput.value.trim();
             const newVolumeFetch = volumeDataSelect.value === "true";
+            const newCblCopy = cblLinkSelect.value === "true";
 
             const currentMatchType = getBangumiMatchType();
             const currentToken = getBangumiAccessToken();
             const currentVolumeFetch = getVolumeDataFetch();
+            const currentCblCopy = getCblLinkCopy();
 
             let messages = [];
 
@@ -411,6 +446,11 @@ function showSettingsDialog() {
             if (newVolumeFetch !== currentVolumeFetch) {
                 GM_setValue(VOLUME_DATA_FETCH_KEY, newVolumeFetch);
                 messages.push(`获取单行本数据: ${newVolumeFetch ? "是" : "否"}`);
+            }
+
+            if (newCblCopy !== currentCblCopy) {
+                GM_setValue(CBL_LINK_COPY_KEY, newCblCopy);
+                messages.push(`复制Btv链接为cbl: ${newCblCopy ? "是" : "否"}`);
             }
 
             if (messages.length > 0) {
@@ -2074,10 +2114,17 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const seriesResStr = await asyncReq(apiUrl, 'GET', undefined, {}); // API call
     const btvData = JSON.parse(seriesResStr);
 
+    // 构建links数组，如果启用了cbl复制选项则添加cbl链接
+    const btvUrl = `${btvLegacyUrl}/subject/${subjectId}`;
+    let linksArray = [{ label: 'Btv', url: btvUrl }];
+    if (getCblLinkCopy()) {
+        linksArray.push({ label: 'cbl', url: btvUrl });
+    }
+
     let seriesMeta = {
         title: '', titleLock: false, titleSort: '', titleSortLock: false,
         status: '', statusLock: false, tags: [], tagsLock: false,
-        links: [{ label: 'Btv', url: `${btvLegacyUrl}/subject/${subjectId}` }], linksLock: false,
+        links: linksArray, linksLock: false,
         publisher: '', publisherLock: false, totalBookCount: null, totalBookCountLock: false,
         summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
     };
