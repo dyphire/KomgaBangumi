@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.12
+// @version      2.9.13
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -2190,8 +2190,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let val = parseInfobox(infobox, key);
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
-            val.split(/[/／、_→・×&,，]/).forEach(name => { // Handle multiple authors for the same role
-                const trimmedName = name.replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim();
+            val.replace(/[《【（\[\(（][^》】）\]\)）]*[》】）\]\)）]/g, '').split(/[/／、_→・×&,，]/).forEach(name => { // Handle multiple authors for the same role
+                const trimmedName = name.trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
                 }
@@ -2472,7 +2472,7 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
     seriesMeta.summary = t2s(seriesDesc.replace(/[\r\n]+/g, '\n').replace(/\【.*?\】$/,'').trim());
 
     mainEle.querySelectorAll('a[href^="https://bookof.moe/s/AUT"]').forEach(link => {
-        const authorName = t2s(link.textContent?.trim());
+        const authorName = t2s(link.textContent?.trim().replace(/[《【（\[\(（][^》】）\]\)）]*[》】）\]\)）]/g, '').trim());
         if (authorName) authors.push({ name: authorName, role: 'writer' }); // BoF doesn't usually specify roles beyond "author"
     });
     seriesMeta.authors = authors;
