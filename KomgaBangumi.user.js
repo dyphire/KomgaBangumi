@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.13
+// @version      2.9.14
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -47,6 +47,7 @@ const defaultReqHeaders = { // Renamed to avoid conflict with local var 'default
 const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Bangumi Access Token的键名
 const BANGUMI_MATCH_TYPE_KEY = "bangumi_match_type"; // 用于存储匹配类型的键名
 const VOLUME_DATA_FETCH_KEY = 'komga_volume_data_fetch'; // 用于存储是否获取单行本数据的键名
+const BATCH_FORCE_REFRESH_BTV_KEY = 'komga_batch_force_refresh_btv'; // 用于存储批量匹配时是否强制刷新已有btv链接的系列
 
 const bangumiApiHeaders = {
     'User-Agent': `${GM_info.script.name}/${GM_info.script.version} (UserScript; ${GM_info.script.namespace})`,
@@ -67,6 +68,11 @@ function getBangumiMatchType() {
 // 读取是否获取单行本数据，默认 false
 function getVolumeDataFetch() {
     return GM_getValue(VOLUME_DATA_FETCH_KEY, false);
+}
+
+// 读取批量匹配时是否强制刷新已有btv链接的系列，默认 false
+function getBatchForceRefreshBtv() {
+    return GM_getValue(BATCH_FORCE_REFRESH_BTV_KEY, false);
 }
 
 // 定义常用样式
@@ -272,8 +278,27 @@ function showSettingsDialog() {
         volumeDataSection.appendChild(volumeDataLabel);
         volumeDataSection.appendChild(volumeDataSelect);
 
+        // 批量匹配强制刷新已有btv链接设置
+        const forceRefreshBtvSection = document.createElement("div");
+        const forceRefreshBtvLabel = document.createElement("div");
+        forceRefreshBtvLabel.textContent = "批量匹配时强制刷新已有btv链接的系列：";
+        forceRefreshBtvLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const forceRefreshBtvSelect = document.createElement("select");
+        forceRefreshBtvSelect.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        const forceRefreshYesOption = document.createElement("option");
+        forceRefreshYesOption.value = "true";
+        forceRefreshYesOption.textContent = "是";
+        const forceRefreshNoOption = document.createElement("option");
+        forceRefreshNoOption.value = "false";
+        forceRefreshNoOption.textContent = "否";
+        forceRefreshBtvSelect.appendChild(forceRefreshYesOption);
+        forceRefreshBtvSelect.appendChild(forceRefreshNoOption);
+        forceRefreshBtvSection.appendChild(forceRefreshBtvLabel);
+        forceRefreshBtvSection.appendChild(forceRefreshBtvSelect);
+
         content.appendChild(matchTypeSection);
         content.appendChild(volumeDataSection);
+        content.appendChild(forceRefreshBtvSection);
         content.appendChild(tokenSection);
 
         const btnContainer = document.createElement("div");
@@ -333,6 +358,9 @@ function showSettingsDialog() {
             volumeDataSelect.style.backgroundColor = "#333";
             volumeDataSelect.style.color = "#fff";
             volumeDataSelect.style.border = "1px solid #666";
+            forceRefreshBtvSelect.style.backgroundColor = "#333";
+            forceRefreshBtvSelect.style.color = "#fff";
+            forceRefreshBtvSelect.style.border = "1px solid #666";
             tokenInput.style.backgroundColor = "#333";
             tokenInput.style.color = "#fff";
             tokenInput.style.border = "1px solid #666";
@@ -363,6 +391,9 @@ function showSettingsDialog() {
             volumeDataSelect.style.backgroundColor = "#fff";
             volumeDataSelect.style.color = "#333";
             volumeDataSelect.style.border = "1px solid #ccc";
+            forceRefreshBtvSelect.style.backgroundColor = "#fff";
+            forceRefreshBtvSelect.style.color = "#333";
+            forceRefreshBtvSelect.style.border = "1px solid #ccc";
             tokenInput.style.backgroundColor = "#fff";
             tokenInput.style.color = "#333";
             tokenInput.style.border = "1px solid #ccc";
@@ -372,10 +403,12 @@ function showSettingsDialog() {
         const currentMatchType = getBangumiMatchType();
         const currentToken = getBangumiAccessToken();
         const currentVolumeFetch = getVolumeDataFetch();
+        const currentForceRefreshBtv = getBatchForceRefreshBtv();
 
         matchTypeSelect.value = currentMatchType;
         tokenInput.value = currentToken || "";
         volumeDataSelect.value = currentVolumeFetch.toString();
+        forceRefreshBtvSelect.value = currentForceRefreshBtv.toString();
 
         closeBtn.onclick = () => {
             cleanup();
@@ -386,10 +419,12 @@ function showSettingsDialog() {
             const newMatchType = matchTypeSelect.value;
             const newToken = tokenInput.value.trim();
             const newVolumeFetch = volumeDataSelect.value === "true";
+            const newForceRefreshBtv = forceRefreshBtvSelect.value === "true";
 
             const currentMatchType = getBangumiMatchType();
             const currentToken = getBangumiAccessToken();
             const currentVolumeFetch = getVolumeDataFetch();
+            const currentForceRefreshBtv = getBatchForceRefreshBtv();
 
             let messages = [];
 
@@ -411,6 +446,11 @@ function showSettingsDialog() {
             if (newVolumeFetch !== currentVolumeFetch) {
                 GM_setValue(VOLUME_DATA_FETCH_KEY, newVolumeFetch);
                 messages.push(`获取单行本数据: ${newVolumeFetch ? "是" : "否"}`);
+            }
+
+            if (newForceRefreshBtv !== currentForceRefreshBtv) {
+                GM_setValue(BATCH_FORCE_REFRESH_BTV_KEY, newForceRefreshBtv);
+                messages.push(`批量匹配强制刷新已有btv链接的系列: ${newForceRefreshBtv ? "是" : "否"}`);
             }
 
             if (messages.length > 0) {
@@ -2805,6 +2845,21 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
         matchResult.name = seriesName || oriKomgaTitle;
 
         if (komgaMeta?.links?.find(l => l.label?.toLowerCase() === searchType.toLowerCase() && l.url)) {
+            const forceRefresh = searchType.toLowerCase() === 'btv' && getBatchForceRefreshBtv();
+            if (forceRefresh) {
+                const existingLink = komgaMeta.links.find(l => l.label?.toLowerCase() === searchType.toLowerCase() && l.url);
+                const idMatch = existingLink.url.match(/\/subject\/(\d+)/);
+                const existingId = idMatch ? idMatch[1] : null;
+                if (existingId) {
+                    console.info(`${logPrefix} 《${matchResult.name}》已存在 ${searchType.toUpperCase()} 链接，强制刷新中...`);
+                    localStorage.setItem(`SID-${komgaSeriesId}`, syncType);
+                    localStorage.setItem(`STY-${komgaSeriesId}`, searchType);
+                    await fetchBookByUrl(komgaSeriesId, existingId, '', searchType);
+                    matchResult = { ...matchResult, success: true, matchedWithTitle: existingLink.url, matchedSourceField: 'existing btv link (force refresh)', skipped: false };
+                    if ($domForLoading) partLoadingEnd($domForLoading);
+                    return matchResult;
+                }
+            }
             console.info(`${logPrefix} 《${matchResult.name}》已存在 ${searchType.toUpperCase()} 链接，跳过`);
             matchResult = { ...matchResult, success: true, skipped: true, reason: `Existing ${searchType.toUpperCase()} link` };
             if ($domForLoading) partLoadingEnd($domForLoading);
