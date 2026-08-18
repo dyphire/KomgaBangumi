@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.14
+// @version      2.9.15
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -596,19 +596,61 @@ function showMessage(msgContent, msgType = 'success', duration = 5000) {
 }
 
 function findDomElementForSeries(komgaSeriesId) {
-    let $dom = $(`div.v-card[komgaseriesid="${komgaSeriesId}"]`);
+    let $dom = $(`div.v-card[komgaseriesid="${komgaSeriesId}"], div.v-card[komgaSeriesId="${komgaSeriesId}"], div.my-2.mx-2[komgaseriesid="${komgaSeriesId}"], div.my-2.mx-2[komgaSeriesId="${komgaSeriesId}"], .item-card[komgaseriesid="${komgaSeriesId}"], .item-card[komgaSeriesId="${komgaSeriesId}"]`);
     if ($dom.length > 0) return $dom.first();
-    $dom = $(`div.my-2.mx-2[komgaseriesid="${komgaSeriesId}"]`);
+    $dom = $(`div.v-card[komgaseriesid], div.my-2.mx-2[komgaseriesid], .item-card[komgaseriesid], div.v-card[komgaSeriesId], div.my-2.mx-2[komgaSeriesId], .item-card[komgaSeriesId]`);
+    $dom.each(function() {
+        const $el = $(this);
+        const id = getSeriesIdFromElement($el);
+        if (id === komgaSeriesId) {
+            $dom = $el;
+            return false;
+        }
+    });
     if ($dom.length > 0) return $dom.first();
     return null;
 }
 
+function getSeriesIdFromHref(href) {
+    if (!href) return null;
+
+    const match = href.match(/(?:^|\/)(?:series|oneshot)\/([^/?#]+)/);
+    return match ? match[1] : null;
+}
+
+function getSeriesIdFromElement($el) {
+    if (!$el || $el.length === 0) return null;
+
+    const $element = $el instanceof jQuery ? $el : $($el);
+
+    // 1. 优先使用元素自身的 Komga Series ID
+    const id = $element.attr('komgaseriesid') || $element.attr('komgaSeriesId');
+    if (id) return id;
+
+    // 2. 从链接中获取
+    const href =
+        $element.find('a[href*="/series/"]').first().attr('href') ||
+        $element.find('a[href*="/oneshot/"]').first().attr('href') ||
+        $element.attr('href') ||
+        '';
+
+    const hrefId = getSeriesIdFromHref(href);
+    if (hrefId) return hrefId;
+
+    // 3. 从缩略图 background-image 中获取
+    const bgStyle = $element.find('.v-image__image').first().attr('style') || '';
+    const bgId = getSeriesIdFromHref(bgStyle);
+    if (bgId) return bgId;
+
+    return null;
+}
+
 function loadSearchBtn($dom, komgaSeriesId) {
-    $dom.attr('komgaSeriesId', komgaSeriesId);
+    $dom.attr('komgaseriesid', komgaSeriesId);
     const width = $dom.width();
     const btnDia = Math.max(width / 5.5, 34);
-    let $syncInfo = $('<button title="仅更新元数据"></button>').attr('komgaSeriesId', komgaSeriesId);
-    let $syncAll = $('<button title="更新元数据和封面"></button>').attr('komgaSeriesId', komgaSeriesId);
+    let $syncInfo = $('<button title="仅更新元数据"></button>').attr('komgaseriesid', komgaSeriesId);
+    let $syncAll = $('<button title="更新元数据和封面"></button>').attr('komgaseriesid', komgaSeriesId);
     const currentBtnStyle = { ...btnStyle, width: btnDia, height: btnDia };
 
     // 检查当前是否在 '/collections' 或 '/readlists' 页面
@@ -3025,9 +3067,9 @@ async function batchMatchTarget(type, id, name) {
 
 function addBatchMatchButtonIfNeeded() {
     const path = window.location.pathname;
-    const recMatch = path.match(/^\/libraries\/([a-zA-Z0-9]+(?:-sync)?)\/recommended$/);
-    const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([a-zA-Z0-9]+(?:-sync)?)(?:\/.*)?$/);
-    const colMatch = path.match(/^\/collections\/([a-zA-Z0-9]+)$/);
+    const recMatch = path.match(/^\/libraries\/([^/?#]+)\/recommended$/);
+    const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([^/?#]+)(?:\/.*)?$/);
+    const colMatch = path.match(/^\/collections\/([^/?#]+)$/);
 
     if (!recMatch && !libMatch && !colMatch) {
         $('#batchMatchLibraryBtn').remove();
@@ -3058,9 +3100,9 @@ function addBatchMatchButtonIfNeeded() {
         let pageType = null;
         let targetId = null;
 
-        const recMatch = path.match(/^\/libraries\/([a-zA-Z0-9]+(?:-sync)?)\/recommended$/);
-        const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([a-zA-Z0-9]+(?:-sync)?)(?:\/.*)?$/);
-        const colMatch = path.match(/^\/collections\/([a-zA-Z0-9]+)$/);
+        const recMatch = path.match(/^\/libraries\/([^/?#]+)\/recommended$/);
+        const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([^/?#]+)(?:\/.*)?$/);
+        const colMatch = path.match(/^\/collections\/([^/?#]+)$/);
 
 
         if (recMatch) {
@@ -3106,17 +3148,8 @@ function addBatchMatchButtonIfNeeded() {
 function main() {
     console.log("KomgaBangumi script started. Setting up observer.");
 
-    const SERIES_CARD_SELECTOR = 'div[class*="v-card"], div.my-2.mx-2, .card-container';
-    const DETAIL_CARD_SELECTOR = 'div.container > div > div > .v-card:first-child';
-
-    function getSeriesIdFromHref(href) {
-        if (!href) return null;
-        let match = href.match(/\/series\/(\w+)/);
-        if (match) return match[1];
-        match = href.match(/\/oneshot\/(\w+)/);
-        if (match) return match[1];
-        return null;
-    }
+    const SERIES_CARD_SELECTOR = 'div[class*="v-card"], div.my-2.mx-2, .card-container, .item-card';
+    const DETAIL_CARD_SELECTOR = 'div.container > div > div > .v-card:first-child, div.container > div.row > div.col > .v-card, div.v-card[komgaseriesid]';
 
     function scanAndInjectButtons(root) {
         const $root = root ? $(root) : $(document);
@@ -3124,17 +3157,13 @@ function main() {
         $root.find(SERIES_CARD_SELECTOR).addBack(SERIES_CARD_SELECTOR).each(function() {
             const $card = $(this);
             if ($card.find('button[komgaseriesid]').length) return;
-            const bgStyle = $card.find('.v-image__image').attr('style') || '';
-            if (bgStyle.includes('/thumbnails/')) return;
-            const $link = $card.find('a[href]').first();
-            const id = getSeriesIdFromHref($link.attr('href'));
+            const id = getSeriesIdFromElement($card);
             if (id) loadSearchBtn($card, id);
         });
 
         const $detailCard = $root.find(DETAIL_CARD_SELECTOR).addBack(DETAIL_CARD_SELECTOR).first();
         if ($detailCard.length > 0 && $detailCard.find('button[komgaseriesid]').length === 0) {
-            const currentHref = location.href.replace(/%2F/g, '/');
-            const id = getSeriesIdFromHref(currentHref);
+            const id = getSeriesIdFromElement($detailCard) || getSeriesIdFromHref(location.href);
             if (id) loadSearchBtn($detailCard, id);
         }
     }
