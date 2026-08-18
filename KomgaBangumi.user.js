@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.15
+// @version      2.9.16
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1492,12 +1492,11 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
             }
 
             validTried = true;
-            let updateSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails`;
+            let updateSeriesCoverUrl = `${location.origin}/api/v1/series/${komgaSeriesId}/thumbnails?selected=true`;
             const seriesCoverFormdata = new FormData();
             const fileName = `series_cover_${komgaSeriesId}.jpg`;
             const seriesCoverFile = new File([blob], fileName, { type: blob.type || 'image/jpeg' });
             seriesCoverFormdata.append('file', seriesCoverFile);
-            seriesCoverFormdata.append('selected', 'true');
             await asyncReq(updateSeriesCoverUrl, 'POST', seriesCoverFormdata);
 
             showMessage(`《${komgaSeriesName}》系列封面 (${imageSizeLabel}) 已更新`, 'success', 2500);
