@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.16
+// @version      2.9.17
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1526,6 +1526,22 @@ async function updateKomgaSeriesCover(komgaSeriesId, komgaSeriesName, orderedIma
     return false;
 }
 
+async function updateKomgaOneshotBookCover(komgaSeriesId, seriesName, coverUrls) {
+    if (!coverUrls || coverUrls.length === 0) {
+        showMessage(`《${seriesName}》One-Shot封面URL为空，跳过更新`, 'warning');
+        return false;
+    }
+
+    const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
+    if (!seriesBooks.content || seriesBooks.content.length === 0) {
+        showMessage(`《${seriesName}》One-Shot没有关联书籍`, 'warning');
+        return false;
+    }
+
+    const book = seriesBooks.content[0];
+    return await updateKomgaBookCover(book, seriesName, '', coverUrls);
+}
+
 async function cleanKomgaSeriesCover(komgaSeriesId, komgaSeriesName) {
     const thumbs = await getKomgaSeriesCovers(komgaSeriesId);
     // Filter for thumbnails that are USER_UPLOADED and NOT currently selected
@@ -1646,12 +1662,11 @@ async function updateKomgaBookCover(book, komgaSeriesName, bookNumberForDisplay,
             }
 
             validTried = true;
-            let updateBookCoverUrl = `${location.origin}/api/v1/books/${book.id}/thumbnails`;
+            let updateBookCoverUrl = `${location.origin}/api/v1/books/${book.id}/thumbnails?selected=true`;
             let bookCoverFormdata = new FormData();
             let bookCoverName = `vol_${bookNumberForDisplay}_cover.jpg`;
             let bookCoverFile = new File([blob], bookCoverName, { type: blob.type || 'image/jpeg' });
             bookCoverFormdata.append('file', bookCoverFile);
-            bookCoverFormdata.append('selected', 'true');
             await asyncReq(updateBookCoverUrl, 'POST', bookCoverFormdata);
 
             showMessage(`《${komgaSeriesName}》卷 ${bookNumberForDisplay} 封面 (${imageSizeLabel}版本) 已更新`, 'success', 1500);
@@ -2271,7 +2286,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let val = parseInfobox(infobox, key);
         console.log(`[baseAsyncReq] Success (${val}...`);
         if (val) {
-            val.replace(/[《【（\[\(（][^》】）\]\)）]*[》】）\]\)）]/g, '').split(/[/／、_→・×&,，]/).forEach(name => { // Handle multiple authors for the same role
+            val.replace(/[《【（\[\(（][^》】）\]\)）]*[》】）\]\)）]/g, '').split(/[/／、_→・:×&,，]/).forEach(name => { // Handle multiple authors for the same role
                 const trimmedName = name.trim();
                 if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
                     resAuthors.push({ name: t2s(trimmedName), role: role });
@@ -2442,12 +2457,17 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     // --- 更新系列封面 ---
     if (fetchSeriesType === 'all') {
         if (uniqueSeriesCoverUrls.length > 0) {
-            await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, uniqueSeriesCoverUrls);
+            if (komgaSeries.oneshot) {
+                await updateKomgaOneshotBookCover(komgaSeriesId, seriesNameForDisplay, uniqueSeriesCoverUrls);
+            } else {
+                await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, uniqueSeriesCoverUrls);
+            }
         } else {
             showMessage(`《${seriesNameForDisplay}》未能获取系列主封面 (BGM API)`, 'warning');
         }
 
-        await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bookVolumeCoverSets, volumeMates);
+        const coverSets = komgaSeries.oneshot ? [] : bookVolumeCoverSets;
+        await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], coverSets, volumeMates);
     } else if (updateAuthorsFlag || (needUpdateVolumeNums && needUpdateVolumeNums.size > 0)) { // 'meta' only sync, but authors need update
         console.log(`[fetchBtvSubjectByUrlAPI] 更新系列 ${komgaSeriesId} 的作者或卷信息`);
         await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, finalMeta.authors, [], volumeMates); // Pass empty cover sets
@@ -2612,6 +2632,7 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
 
     const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
     const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
+    const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
     const updateAuthorsFlag = finalMeta.authors && finalMeta.authors.length > 0 && ifUpdateBook(seriesBooks, finalMeta.authors);
     const needUpdateVolumeNums = getVolumeNumsNeedUpdate(seriesBooks);
 
@@ -2648,8 +2669,12 @@ async function fetchMoeBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl = '') 
 
         // 更新系列主封面和卷封面
         if (bofVolumeRawCoverUrls.length > 0) {
-            await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, [bofVolumeRawCoverUrls[0]]); // 使用第一个卷的封面作为系列封面
-            const bofBookVolumeCoverSets = bofVolumeRawCoverUrls.map(url => ({ coverUrls: [url] })); // BoF usually has one cover per vol
+            if (komgaSeries.oneshot) {
+                await updateKomgaOneshotBookCover(komgaSeriesId, seriesNameForDisplay, [bofVolumeRawCoverUrls[0]]);
+            } else {
+                await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, [bofVolumeRawCoverUrls[0]]);
+            }
+            const bofBookVolumeCoverSets = komgaSeries.oneshot ? [] : bofVolumeRawCoverUrls.map(url => ({ coverUrls: [url] }));
             await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, updateAuthorsFlag ? finalMeta.authors : [], bofBookVolumeCoverSets);
         } else {
             if (bookCoverFrameUrl) { // If frame URL existed but parsing failed
@@ -2719,6 +2744,7 @@ async function fetchMangadexBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl =
             || mangaData.data.attributes.title.en;
 
         const fetchSeriesType = localStorage.getItem(`SID-${komgaSeriesId}`);
+        const komgaSeries = await getKomgaSeriesData(komgaSeriesId);
         if (fetchSeriesType === 'all') {
             // 获取系列封面
             const coverRel = mangaData.data.relationships.find(rel => rel.type === 'cover_art');
@@ -2772,10 +2798,15 @@ async function fetchMangadexBookByUrl(komgaSeriesId, reqSeriesId, reqSeriesUrl =
             const seriesBooks = await getKomgaSeriesBooks(komgaSeriesId);
 
             if (seriesCoverUrls.length > 0) {
-                await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, seriesCoverUrls);
+                if (komgaSeries.oneshot) {
+                    await updateKomgaOneshotBookCover(komgaSeriesId, seriesNameForDisplay, seriesCoverUrls);
+                } else {
+                    await updateKomgaSeriesCover(komgaSeriesId, seriesNameForDisplay, seriesCoverUrls);
+                }
             }
 
-            await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, null, bookVolumeCoverSets, volumeMates);
+            const coverSets = komgaSeries.oneshot ? [] : bookVolumeCoverSets;
+            await updateKomgaBookAll(komgaSeriesId, seriesBooks, seriesNameForDisplay, null, coverSets, volumeMates);
         } else {
             showMessage('Mangadex 只支持更新封面', 'warning');
         }
