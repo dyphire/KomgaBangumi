@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.17
+// @version      2.9.18
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -1212,84 +1212,180 @@ function normalizeVolNum(raw) {
 
 // ************************************** API封装 **************************************
 //<editor-fold desc="基本请求封装">
-function asyncReq(url, method, data_ry = {}, headers = null, responseType = 'text') {
+async function asyncReq(url, method, data_ry = {}, headers = null, responseType = 'text') {
+    let requestHeaders = { ...headers };
+    let requestData = data_ry;
+    if (data_ry instanceof FormData) {
+        // 对于 FormData，Content-Type 由浏览器自动设置
+    } else if (method !== "GET" && typeof data_ry === 'object') {
+        requestData = JSON.stringify(data_ry);
+        requestHeaders = { ...defaultReqHeaders, ...requestHeaders };
+    } else if (method === "GET") {
+        requestData = undefined;
+        delete requestHeaders['content-type'];
+        delete requestHeaders['Content-Type'];
+    }
+    // Bangumi API
+    if (url.startsWith(btvApiUrl)) {
+        requestHeaders = { ...bangumiApiHeaders, ...requestHeaders };
+        const accessToken = getBangumiAccessToken();
+        if (accessToken) {
+            requestHeaders['Authorization'] = `Bearer ${accessToken}`;
+        }
+    }
+    let requestUrl = url;
+    // GET 请求添加缓存清除参数
+    if (
+        method === 'GET' &&
+        !url.startsWith(btvApiUrl) &&
+        !url.startsWith(bofUrl) &&
+        !url.startsWith(mangadexApiUrl)
+    ) {
+        requestUrl += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+    }
+    /*
+     * Komga 同源 API：
+     *
+     * Safari 下 GM_xmlhttpRequest 可能无法正确携带当前网页的
+     * Komga 登录 Cookie
+     *
+     * 使用原生 fetch，并明确要求携带 Cookie
+     */
+    const requestOrigin = new URL(requestUrl, location.href).origin;
+    const isSameOrigin = requestOrigin === location.origin;
+    if (isSameOrigin) {
+        try {
+            const response = await fetch(requestUrl, {
+                method: method,
+                headers: requestHeaders,
+                body: requestData,
+                credentials: 'include'
+            });
+            if (!response.ok) {
+                const responseText = await response.text();
+                console.error(
+                    `[asyncReq] HTTP Error (${response.status}): ${method} ${requestUrl.substring(0, 100)}...`,
+                    response.statusText,
+                    responseText?.substring(0, 200)
+                );
+                showMessage(
+                    `请求错误 (${response.status}): ${method} ${requestUrl.substring(0, 60)}...`,
+                    'error',
+                    7000
+                );
+                throw new Error(
+                    `HTTP Error ${response.status}: ${response.statusText || 'Unknown error'}`
+                );
+            }
+            if (responseType === 'json') {
+                return await response.json();
+            }
+            if (responseType === 'text') {
+                return await response.text();
+            }
+            return await response.arrayBuffer();
+        } catch (error) {
+            console.error(
+                `[asyncReq] Fetch Error: ${method} ${requestUrl.substring(0, 100)}...`,
+                error
+            );
+            if (error instanceof TypeError) {
+                showMessage(
+                    `网络请求失败: ${method} ${requestUrl.substring(0, 60)}...`,
+                    'error',
+                    7000
+                );
+            }
+            throw error;
+        }
+    }
+    /*
+     * 非同源请求继续使用 GM_xmlhttpRequest
+     *
+     * 例如：
+     * - Bangumi
+     * - MangaDex
+     * - 其他第三方 API
+     */
     return new Promise((resolve, reject) => {
-        let requestHeaders = { ...headers }; // 从传入的 headers 开始
-        let requestData = data_ry;
-
-        if (data_ry instanceof FormData) {
-            // 对于 FormData, Content-Type 由浏览器设置
-        } else if (method !== "GET" && typeof data_ry === 'object') {
-            requestData = JSON.stringify(data_ry);
-            requestHeaders = { ...defaultReqHeaders, ...requestHeaders }; // 与默认值合并，传入的 headers 优先
-        } else if (method === "GET") {
-            requestData = undefined;
-            // 对于 GET, 通常不需要 Content-Type
-            delete requestHeaders['content-type']; // 确保 GET 请求没有默认的 content-type
-        }
-
-        // 如果适用，添加 Bangumi 特定请求头和 Authorization 令牌
-        if (url.startsWith(btvApiUrl)) {
-             requestHeaders = { ...bangumiApiHeaders, ...requestHeaders }; // Bangumi 基础请求头优先，然后是特定调用的请求头
-
-             const accessToken = getBangumiAccessToken();
-             if (accessToken) {
-                 requestHeaders['Authorization'] = `Bearer ${accessToken}`;
-                 // console.log("正在为请求使用Bangumi Access Token:", url.substring(0,60));
-             } else {
-                 // console.log("未找到用于请求的Bangumi Access Token:", url.substring(0,60));
-             }
-        }
-
-        let requestUrl = url;
-        // 为 GET 请求添加缓存清除参数，除非是不喜欢它的API (例如外部API)
-        if (method === 'GET' && !url.startsWith(btvApiUrl) && !url.startsWith(bofUrl) && !url.startsWith(mangadexApiUrl)) {
-            requestUrl += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
-        }
-
         GM_xmlhttpRequest({
             method: method,
             url: requestUrl,
             headers: requestHeaders,
             data: requestData,
             responseType: responseType,
-            timeout: 30000, // 30 秒超时
+            timeout: 30000,
             onload: (response) => {
                 if (response.status >= 200 && response.status < 300) {
-                    resolve(responseType === 'text' || responseType === 'json' ? response.responseText : response.response);
-                } else if (response.status === 401 && url.startsWith(btvApiUrl)) { // Bangumi API 认证失败
-                    console.error(`[asyncReq] Bangumi API 授权错误 (401): ${method} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
-                    // 检查是否存在已配置的 Access Token
+                    resolve(
+                        responseType === 'text' || responseType === 'json'
+                            ? response.responseText
+                            : response.response
+                    );
+                } else if (response.status === 401 && url.startsWith(btvApiUrl)) {
+                    console.error(
+                        `[asyncReq] Bangumi API 授权错误 (401): ${method} ${requestUrl.substring(0, 100)}...`,
+                        response.statusText,
+                        response.responseText?.substring(0, 200)
+                    );
                     const currentToken = getBangumiAccessToken();
                     if (currentToken) {
                         showMessage(
-                            `Bangumi API认证失败(401)。您配置的Access Token可能已失效或不正确。请通过油猴脚本菜单更新Token。`,
+                            `Bangumi API认证失败(401)。您配置的AccessToken可能已失效或不正确。请通过油猴脚本菜单更新Token。`,
                             'error',
-                            15000 // 显示更长时间
+                            15000
                         );
                     } else {
                         showMessage(
-                            `Bangumi API认证失败(401)。如果您想使用Access Token，请通过油猴脚本菜单进行配置。`,
+                            `Bangumi API认证失败(401)。如果您想使用AccessToken，请通过油猴脚本菜单进行配置。`,
                             'error',
                             10000
                         );
                     }
-                    reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unauthorized'}. Bangumi Access Token might be invalid or expired.`));
-                }
-                else {
-                    console.error(`[asyncReq] HTTP Error (${response.status}): ${method} ${requestUrl.substring(0,100)}...`, response.statusText, response.responseText?.substring(0, 200));
-                    showMessage(`请求错误 (${response.status}): ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
-                    reject(new Error(`HTTP Error ${response.status}: ${response.statusText || 'Unknown error'}`));
+                    reject(
+                        new Error(
+                            `HTTP Error ${response.status}: ${response.statusText || 'Unauthorized'}. Bangumi Access Token might be invalid or expired.`
+                        )
+                    );
+                } else {
+                    console.error(
+                        `[asyncReq] HTTP Error (${response.status}): ${method} ${requestUrl.substring(0, 100)}...`,
+                        response.statusText,
+                        response.responseText?.substring(0, 200)
+                    );
+                    showMessage(
+                        `请求错误 (${response.status}): ${method} ${requestUrl.substring(0, 60)}...`,
+                        'error',
+                        7000
+                    );
+                    reject(
+                        new Error(
+                            `HTTP Error ${response.status}: ${response.statusText || 'Unknown error'}`
+                        )
+                    );
                 }
             },
             onerror: (error) => {
-                console.error(`[asyncReq] Network Error: ${method} ${requestUrl.substring(0,100)}...`, error);
-                showMessage(`网络请求失败: ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                console.error(
+                    `[asyncReq] Network Error: ${method} ${requestUrl.substring(0, 100)}...`,
+                    error
+                );
+                showMessage(
+                    `网络请求失败: ${method} ${requestUrl.substring(0, 60)}...`,
+                    'error',
+                    7000
+                );
                 reject(new Error('Network request failed'));
             },
             ontimeout: () => {
-                console.error(`[asyncReq] Timeout: ${method} ${requestUrl.substring(0,100)}...`);
-                showMessage(`请求超时: ${method} ${requestUrl.substring(0, 60)}...`, 'error', 7000);
+                console.error(
+                    `[asyncReq] Timeout: ${method} ${requestUrl.substring(0, 100)}...`
+                );
+                showMessage(
+                    `请求超时: ${method} ${requestUrl.substring(0, 60)}...`,
+                    'error',
+                    7000
+                );
                 reject(new Error('Request timed out'));
             }
         });
