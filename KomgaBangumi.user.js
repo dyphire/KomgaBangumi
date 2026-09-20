@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.18
+// @version      2.9.19
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -37,7 +37,7 @@ const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject link
 const bofUrl = 'https://bookof.moe';
 const mangadexUrl = 'https://mangadex.org';
 const mangadexApiUrl = 'https://api.mangadex.org';
-const tagLabels = '架空,搞笑,欢乐,欢乐向,热血,运动,恋爱,轻改,后宫,校园,青年,少年,少女,青年向,少年向,少女向,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行，异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,连载,连载中,完结,已完结,停刊,长期休载,停止连载,休刊';
+const tagLabels = '架空,搞笑,欢乐,欢乐向,热血,运动,恋爱,轻改,后宫,校园,青年,少年,少女,青年向,少年向,少女向,英雄,青春,友情,治愈,邪道,战斗,魔法,科幻,冒险,推理,悬疑,侦探,竞技,体育,励志,职场,社会,史诗,历史,战争,机战,末世,意识流,宗教,神鬼,妹控,奇幻,异界,轮回,穿越,重生,恐怖,短篇,反转,萌系,百合,日常,旅行,异世界,偶像,转生,伦理,黑暗,亲情,家庭,暴力,复仇,血腥,兄妹,生命,哲学,废土,致郁,性转,兄控,颜艺,感动,地下城,篮球,足球,棒球,网球,排球,高尔夫,保龄球,滑板,滑雪,滑冰,射击,赛车,赛马,拳击,摔跤,格斗,武术,游泳,健身,骑行,登山,攀岩,射箭,钓鱼,烹饪,麻将,围棋,象棋,桥牌,扑克,美食,魔术,占卜,跳舞,唱歌,乐器,绘画,书法,摄影,雕塑,篆刻,陶艺,服装,舞蹈,戏剧,电影,成长,童年,反套路,犯罪,校园霸凌,校园欺凌,外星人,色气,自然主义,将棋,工口,武士,超能力,游戏,街机,梦想,怪物,冷战,社会主义,摇滚,音乐,环保,猎奇,民俗,幽默,僵尸,动物,农业,生活,心理,生存,短篇集,师生,卖肉,纯爱,少女漫画,少女漫,青年漫画,少年漫画,萝莉,巨乳,NTR,伪娘,扭曲,四格,狗粮,智斗,TL,耽美,病娇,JK,BG,BL,BL漫画,BLコミック,轻文学,爱情,游戏改,网文,吐槽,人妻,幼驯染,人外,吸血鬼,幻想,党争,三角恋,萌,脑洞,龙傲天,调教,年上,甜,玄幻,燃,轻百合,恋爱喜剧,TS,一般向,エロ,轻小说改,webtoon,条漫,生存游戏,电波,末日,魔法少女,赌博,寿命论,武侠,惊悚,福利,女性向,硬科幻,网游,喜剧,怪谈,原耽,叙述性诡计,世界系,GL,败犬,治愈系,神展开,日本文学,官能,乙女心,ABO,傲娇,妹,SM,杀必死,童话,中二,妖怪,科普,动画改,长篇,母系,萝卜,熟女,港漫,姐弟,爽文,乱交,辣妹,变态,腐,姐妹,妹系,催泪,人性,催眠,群像,胃药,年龄差,魔女,丧尸,同居,擦边球,古风,王道,叙诡,单元剧,姐控,网文改,恶役千金,同人,误解系,重口,杀手,架空历史,御姐,机器人,年下,社畜,温馨,病态,占有欲,逆后宫,克苏鲁,触手,鬼畜,单恋男,倒贴,日漫GL,扶她,出轨,灾难,黑道,讽刺,先婚后爱,精灵,狗血,种田,魔物娘,太空歌剧,女装,都市,特摄,政治婚姻,虐,荒诞,神话,动作,赛博朋克,修罗场,救赎,系统,黑化,凤傲天,清水系,蒸汽朋克,沙雕,悲剧,业界,魅魔,绝症,女性主人公,cosplay,本格,乱伦,骨科,幼女';
 const equalLabels = ['治愈,治癒', '校园欺凌,校园霸凌', '轻改,轻小说改', '工口,色气,卖肉'];
 
 const defaultReqHeaders = { // Renamed to avoid conflict with local var 'defaultHeaders' in asyncReq
@@ -2148,7 +2148,7 @@ function extractAliases(infoboxArray) {
 
     for (const item of infoboxArray) {
         // 1. 处理直接别名项（支持简体和繁体）
-        const isAliasKey = item.key === "别名" || item.key === "別名";
+        const isAliasKey = item.key === "别名" || item.key === "別名" || item.key === "版本名";
         if (isAliasKey) {
             // 处理所有可能的值类型
             if (typeof item.value === "string") {
@@ -2170,7 +2170,7 @@ function extractAliases(infoboxArray) {
         if (Array.isArray(item.value)) {
             for (const subItem of item.value) {
                 // 检查子项是否是别名（支持简体和繁体）
-                const isSubAlias = subItem?.k === "别名" || subItem?.k === "別名";
+                const isSubAlias = subItem?.k === "别名" || subItem?.k === "別名" || subItem?.k === "版本名";
                 if (isSubAlias && typeof subItem.v === "string") {
                     aliases.add(subItem.v.trim());
                 }
@@ -2189,6 +2189,22 @@ function extractAliases(infoboxArray) {
     }
 
     return Array.from(aliases).filter(a => a).join(" / ");
+}
+
+// 组合式 ageRating：API age_rating 优先（0→0 全年龄、1→15、2→18）；
+// 无 API 值 → nsfw 标记（true→18）；nsfw=false 明确非成人 → null；
+// 无 nsfw → 标签含成人指示词推断 18；未知 API 值 → null。
+function mapBangumiAgeRating(apiAgeRating, nsfw, tags) {
+    if (apiAgeRating !== undefined && apiAgeRating !== null) {
+        if (apiAgeRating === 1) return 15;
+        if (apiAgeRating === 2) return 18;
+        if (apiAgeRating === 0) return 0;
+        return null;
+    }
+    if (nsfw === true) return 18;
+    if (nsfw === false) return null;
+    const adultTags = ['エロ','官能','乱交','SM','触手','鬼畜','催眠','扶她','母系','熟女','调教','恶堕','幼女','R18','成年コミック','成人漫画','アダルトコミック','18X','無修正','無修','无修','H本','A书','黄漫'];
+    return (tags || []).some(t => adultTags.includes(t)) ? 18 : null;
 }
 
 async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
@@ -2272,6 +2288,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         links: [{ label: 'Btv', url: `${btvLegacyUrl}/subject/${subjectId}` }], linksLock: false,
         publisher: '', publisherLock: false, totalBookCount: null, totalBookCountLock: false,
         summary: '', summaryLock: false, alternateTitles: [], authors: [], authorsLock: false,
+        ageRating: null, ageRatingLock: false,
     };
 
     seriesMeta.title = btvData.name_cn && t2s(btvData.name_cn) || t2s(btvData.name);
@@ -2291,7 +2308,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     seriesMeta.genres = komgaSeries.genres || [];
     seriesMeta.genres.push(btvData.platform);
 
-    const statusTags = ["连载", "连载中", "完结", "已完结", "停刊", "长期休载", "停止连载", "休刊"];
+    const statusTags = ["连载", "连载中", "完结", "已完结", "腰斩", "停刊", "长期休载", "停止连载", "休刊"];
 
     if (btvData.tags && btvData.tags.length > 0) {
         const rawApiTags = btvData.tags
@@ -2328,6 +2345,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
             seriesMeta.tags = [];
         }
     }
+
+    seriesMeta.ageRating = mapBangumiAgeRating(btvData.age_rating, btvData.nsfw, seriesMeta.tags);
 
     // 追加识别系列文件夹名称中的出版社/汉化信息
     const publisherKeywords = [
@@ -2441,7 +2460,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         statusVal = t2s(statusVal.toLowerCase()); // Convert to simplified Chinese and lower case for matching
         if (statusVal.includes('休刊') || statusVal.includes('停刊')  || statusVal.includes('停止连载') || statusVal.includes('长期休载')) seriesMeta.status = 'HIATUS';
         else if (statusVal.includes('连载中') || statusVal.includes('连载')) seriesMeta.status = 'ONGOING';
-        else if (statusVal.includes('完结') || statusVal.includes('已完结')) seriesMeta.status = 'ENDED';
+        else if (statusVal.includes('完结') || statusVal.includes('已完结') || statusVal.includes('腰斩')) seriesMeta.status = 'ENDED';
         // else if (statusVal.includes('宣布动画化')) seriesMeta.status = 'ONGOING'; // Or some other appropriate status
     }
 
