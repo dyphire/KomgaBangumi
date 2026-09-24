@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.19
-// @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
+// @version      2.10.0
+// @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token（自动适配官方 Komga WebUI 与 kmweb/kmrs 新 UI）
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
 // @include      *://在此处填入你的komga地址/*
@@ -29,6 +29,22 @@ $('head').append(`
       100% { transform: rotate(360deg); }
     }
   </style>`);
+
+// ---- kmweb (kmrs / KMReader) UI 适配 ----
+// kmweb 由 React + Tailwind 构建，无 Vuetify 组件；脚本自动检测当前 UI 并选用对应选择器。
+$('head').append(`
+  <style>
+    a[href^="/series/"], a[href^="/oneshot/"] { position: relative; }
+  </style>`);
+
+// 检测当前 UI：官方 Komga WebUI 使用 Vuetify 2；next-ui 使用 Vuetify 3（v-img 类名）；
+// kmweb (kmrs) 使用 React + Tailwind
+function getUiMode() {
+    if (document.querySelector('.v-img')) return 'nextui';  // Vuetify 3 (next-ui)
+    if (document.querySelector('header.v-app-bar')) return 'vuetify';  // Vuetify 2 (官方 WebUI)
+    if (document.getElementById('root')) return 'kmweb';
+    return 'vuetify';
+}
 
 const maxReqBooks = 500;
 const sourceLabels = ['Btv', 'Bof', 'Mangadex']; // Btv now uses API
@@ -509,7 +525,8 @@ function partLoadingStart($dom) {
       return;
   }
   if ($dom.find('.loadMask').length > 0) return;
-  const $imageDiv = $dom.find('div.v-image').first();
+  let $imageDiv = $dom.find('div.v-image, div.cover-aspect, div.v-img').first();
+  if ($imageDiv.length === 0) $imageDiv = $dom.find('img').first();
   const loadingWidth = $imageDiv.length > 0 ? $imageDiv.width() : $dom.width();
   const loadingHeight = $imageDiv.length > 0 ? $imageDiv.height() : $dom.height();
   const diameter = Math.min(loadingWidth, loadingHeight) / 3;
@@ -540,7 +557,9 @@ function partLoadingEnd($dom) {
 
 function loadMessage() {
   let msgBoxesIntervalId = setInterval(function () {
-    let $app = $('div#app');
+    const rootSel = getUiMode() === 'kmweb' ? 'div#root' : 'div#app';
+    let $app = $(rootSel);
+    if ($app.length === 0) $app = $('body');
     if ($app.length !== 0) {
       $app.append($msgBoxes);
       clearInterval(msgBoxesIntervalId);
@@ -596,7 +615,22 @@ function showMessage(msgContent, msgType = 'success', duration = 5000) {
 }
 
 function findDomElementForSeries(komgaSeriesId) {
-    let $dom = $(`div.v-card[komgaseriesid="${komgaSeriesId}"], div.v-card[komgaSeriesId="${komgaSeriesId}"], div.my-2.mx-2[komgaseriesid="${komgaSeriesId}"], div.my-2.mx-2[komgaSeriesId="${komgaSeriesId}"], .item-card[komgaseriesid="${komgaSeriesId}"], .item-card[komgaSeriesId="${komgaSeriesId}"]`);
+    // kmweb：系列卡片是 <a href="/series/{id}"> 或 <a href="/oneshot/{id}">，直接按 href 定位
+    if (getUiMode() === 'kmweb') {
+        let $dom = $(`a[href^="/series/"], a[href^="/oneshot/"]`).filter(function () {
+            return getSeriesIdFromHref($(this).attr('href') || '') === komgaSeriesId;
+        });
+        if ($dom.length > 0) {
+            const $card = $dom.first();
+            const $cover = $card.find('div.relative').first();
+            return $cover.length > 0 ? $cover : $card;
+        }
+        return null;
+    }
+    // next-ui / 官方 WebUI：注入目标自带 komgaseriesid（卡片为 v-card，详情 Hero 为 v-img）
+    let $dom = $(`[komgaseriesid="${komgaSeriesId}"], [komgaSeriesId="${komgaSeriesId}"]`).filter(':not(button)');
+    if ($dom.length > 0) return $dom.first();
+    $dom = $(`div.v-card[komgaseriesid="${komgaSeriesId}"], div.v-card[komgaSeriesId="${komgaSeriesId}"], div.my-2.mx-2[komgaseriesid="${komgaSeriesId}"], div.my-2.mx-2[komgaSeriesId="${komgaSeriesId}"], .item-card[komgaseriesid="${komgaSeriesId}"], .item-card[komgaSeriesId="${komgaSeriesId}"]`);
     if ($dom.length > 0) return $dom.first();
     $dom = $(`div.v-card[komgaseriesid], div.my-2.mx-2[komgaseriesid], .item-card[komgaseriesid], div.v-card[komgaSeriesId], div.my-2.mx-2[komgaSeriesId], .item-card[komgaSeriesId]`);
     $dom.each(function() {
@@ -637,10 +671,15 @@ function getSeriesIdFromElement($el) {
     const hrefId = getSeriesIdFromHref(href);
     if (hrefId) return hrefId;
 
-    // 3. 从缩略图 background-image 中获取
-    const bgStyle = $element.find('.v-image__image').first().attr('style') || '';
+    // 3. 从缩略图 background-image 中获取 (Vuetify 2: .v-image__image / Vuetify 3: .v-img__img)
+    const bgStyle = $element.find('.v-image__image, .v-img__img').first().attr('style') || '';
     const bgId = getSeriesIdFromHref(bgStyle);
     if (bgId) return bgId;
+
+    // 4. 从 <img> 的 src 中获取 (kmweb: /api/v1/series/{id}/thumbnail)
+    const imgSrc = $element.find('img').first().attr('src') || '';
+    const imgId = getSeriesIdFromHref(imgSrc);
+    if (imgId) return imgId;
 
     return null;
 }
@@ -667,8 +706,9 @@ function loadSearchBtn($dom, komgaSeriesId) {
         $syncInfo.css({ ...currentBtnStyle, right: btnDia + 15 + 'px' });
     }
 
-    $syncAll.append('<i aria-hidden="true" class="v-icon notranslate mdi mdi-image-sync-outline theme--light" style="font-size: inherit;"></i>');
-    $syncInfo.append('<i aria-hidden="true" class="v-icon notranslate mdi mdi-file-document-edit-outline theme--light" style="font-size: inherit;"></i>');
+    // 两个 WebUI 统一使用内联 SVG 图标，保证渲染一致
+    $syncAll.append('<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>');
+    $syncInfo.append('<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>');
 
     $syncAll.add($syncInfo).on('mouseenter', function () {
         $(this).css({ 'background-color': 'yellow', color: '#3c3c3c' });
@@ -678,11 +718,13 @@ function loadSearchBtn($dom, komgaSeriesId) {
 
     $syncInfo.on('click', async (e) => {
         e.stopPropagation();
+        e.preventDefault(); // kmweb：卡片是 <a> 链接，阻止默认跳转
         await handleSearchClick(komgaSeriesId, 'meta', $dom);
     });
 
     $syncAll.on('click', async (e) => {
         e.stopPropagation();
+        e.preventDefault(); // kmweb：卡片是 <a> 链接，阻止默认跳转
         await handleSearchClick(komgaSeriesId, 'all', $dom);
     });
 
@@ -3213,7 +3255,7 @@ async function batchMatchTarget(type, id, name) {
 function addBatchMatchButtonIfNeeded() {
     const path = window.location.pathname;
     const recMatch = path.match(/^\/libraries\/([^/?#]+)\/recommended$/);
-    const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([^/?#]+)(?:\/.*)?$/);
+    const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$)|pinned(?:\/|$))([^/?#]+)(?:\/.*)?$/);
     const colMatch = path.match(/^\/collections\/([^/?#]+)$/);
 
     if (!recMatch && !libMatch && !colMatch) {
@@ -3223,32 +3265,31 @@ function addBatchMatchButtonIfNeeded() {
 
     if ($('#batchMatchLibraryBtn').length > 0) return;
 
-    const $toolbar = $('header.v-app-bar .v-toolbar__content').first();
-    if ($toolbar.length === 0) return;
-
-    const isDark = $('div#app').hasClass('theme--dark');
-    const themeClass = isDark ? 'theme--dark' : 'theme--light';
-
+    // 官方 WebUI 与 kmweb 统一使用右下角悬浮按钮
     const $btn = $(`
         <button id="batchMatchLibraryBtn" type="button"
-                class="v-btn v-btn--flat ${themeClass} v-size--default mx-1"
+                style="position: fixed; right: 24px; bottom: 24px; z-index: 9999;
+                       display: flex; align-items: center; gap: 6px;
+                       padding: 10px 18px; border: none; border-radius: 9999px;
+                       background-color: #f59e0b !important; color: #1c1917 !important;
+                       font-size: 14px; font-weight: 600; cursor: pointer;
+                       box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+                       transition: background-color 0.2s;"
                 title="批量精确匹配 (元数据：Bangumi API)">
-            <span class="v-btn__content">
-                <i aria-hidden="true" class="v-icon notranslate mdi mdi-target-variant ${themeClass} left v-icon--left"></i>
-                批量匹配
-            </span>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm0-14a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 10a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg>
+            批量匹配
         </button>
     `);
-
+    $btn.on('mouseenter', function () { $(this).css('background-color', '#d97706 !important'); })
+        .on('mouseleave', function () { $(this).css('background-color', '#f59e0b !important'); });
     $btn.on('click', async () => {
         const path = window.location.pathname;
         let pageType = null;
         let targetId = null;
 
         const recMatch = path.match(/^\/libraries\/([^/?#]+)\/recommended$/);
-        const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$))([^/?#]+)(?:\/.*)?$/);
+        const libMatch = path.match(/^\/libraries\/(?!all(?:\/|$)|pinned(?:\/|$))([^/?#]+)(?:\/.*)?$/);
         const colMatch = path.match(/^\/collections\/([^/?#]+)$/);
-
 
         if (recMatch) {
             pageType = 'recommended';
@@ -3278,38 +3319,113 @@ function addBatchMatchButtonIfNeeded() {
             await batchMatchTarget(pageType, targetId, pageTypeName);
         }
     });
-
-    let $point = $toolbar.find('.v-spacer').next('button, .v-btn').first() ||
-                 $toolbar.find('.v-spacer').nextAll('button, .v-btn').first() ||
-                 $toolbar.find('button:has(i.mdi-pencil), button:has(i.mdi-checkbox-multiple-marked-outline)').first();
-    if ($point.length > 0) {
-        $point.before($btn);
-    } else {
-        $toolbar.append($btn);
-    }
+    $('body').append($btn);
 }
 //</editor-fold>
 
-function main() {
-    console.log("KomgaBangumi script started. Setting up observer.");
+function getSeriesCardSelector() {
+    if (getUiMode() === 'kmweb') {
+        // kmweb：系列卡片是 <a href="/series/{id}"> 或 <a href="/oneshot/{id}">
+        return 'a[href^="/series/"], a[href^="/oneshot/"]';
+    }
+    return 'div[class*="v-card"], div.my-2.mx-2, .card-container, .item-card';
+}
 
-    const SERIES_CARD_SELECTOR = 'div[class*="v-card"], div.my-2.mx-2, .card-container, .item-card';
+function getCardDomForKmweb($card) {
+    // 优先注入到封面容器 div.relative，按钮悬停位置与旧版一致
+    const $cover = $card.find('div.relative').first();
+    return $cover.length > 0 ? $cover : $card;
+}
+
+function isSeriesCardForVuetify($card) {
+    // 旧版 WebUI（ItemCard.vue）：v-card 根节点无链接，导航靠 @click；
+    // 卡片类型由封面缩略图 URL 唯一决定（items.ts，按类型硬编码）：
+    // BookItem → /api/v1/books/{id}/thumbnail，SeriesItem → /api/v1/series/{id}/thumbnail。
+    const bg = $card.find('.v-image__image, .v-img__img').first().attr('style') || '';
+    const img = $card.find('img').first().attr('src') || '';
+    const cover = bg + img;
+    // 1. 封面明确是书籍资源 → 拒绝
+    if (/\/api\/v1\/books\//.test(cover)) return false;
+    // 2. 封面明确是系列资源 → 通过
+    if (/\/api\/v1\/series\//.test(cover)) return true;
+    // 3. 封面不可判（加载失败退化为 base64）时，看标题区链接：
+    //    系列卡片标题只指向 /series/{id} 或 /oneshot/{id}；
+    //    书籍卡片（SHOW_SERIES 上下文）同时含系列链接与 /book/{id} 链接
+    const links = [];
+    $card.find('a[href*="/series/"], a[href*="/oneshot/"], a[href*="/book/"]').each(function () {
+        const h = $(this).attr('href') || '';
+        if (h) links.push(h);
+    });
+    const hasSeries = links.some(h => /\/series\/|\/oneshot\//.test(h));
+    const hasBook = links.some(h => /\/book\//.test(h));
+    return hasSeries && !hasBook;
+}
+
+function isSeriesCardForKmweb($card) {
+    // kmweb 系列卡片锚点内含封面容器（div.relative + 缩略图 img）；
+    // 书籍详情页的系列标题链接等纯文本链接不含封面，不应注入
+    return $card.find('div.relative, img').length > 0;
+}
+
+function main() {
+    const isKmweb = getUiMode() === 'kmweb';
+    console.log("KomgaBangumi script started. Setting up observer. UI mode: " + getUiMode());
+
+    const SERIES_CARD_SELECTOR = getSeriesCardSelector();
     const DETAIL_CARD_SELECTOR = 'div.container > div > div > .v-card:first-child, div.container > div.row > div.col > .v-card, div.v-card[komgaseriesid]';
 
     function scanAndInjectButtons(root) {
         const $root = root ? $(root) : $(document);
+        const uiMode = getUiMode();  // 每次扫描实时判定，Vue 挂载后 next-ui 的 .v-img 才出现
 
         $root.find(SERIES_CARD_SELECTOR).addBack(SERIES_CARD_SELECTOR).each(function() {
             const $card = $(this);
+            // 只处理最外层卡片：v-card-title/subtitle/text 等类名也含 "v-card"，
+            // 书籍卡片的标题子元素内只有系列链接，会被链接回退误判为系列卡片
+            if ($card.parents(SERIES_CARD_SELECTOR).length > 0) return;
             if ($card.find('button[komgaseriesid]').length) return;
             const id = getSeriesIdFromElement($card);
-            if (id) loadSearchBtn($card, id);
+            if (id) {
+                // kmweb：仅注入带封面容器的系列卡片，避免书籍详情页系列标题链接等纯文本链接
+                if (isKmweb && !isSeriesCardForKmweb($card)) return;
+                // 旧版 WebUI / next-ui：仅确认是系列卡片才注入；
+                // 书籍卡片标题区可能含系列/单行本链接导致系列 ID 被误匹配
+                if (!isKmweb && !isSeriesCardForVuetify($card)) return;
+                loadSearchBtn(isKmweb ? getCardDomForKmweb($card) : $card, id);
+            }
         });
 
-        const $detailCard = $root.find(DETAIL_CARD_SELECTOR).addBack(DETAIL_CARD_SELECTOR).first();
-        if ($detailCard.length > 0 && $detailCard.find('button[komgaseriesid]').length === 0) {
-            const id = getSeriesIdFromElement($detailCard) || getSeriesIdFromHref(location.href);
-            if (id) loadSearchBtn($detailCard, id);
+        if (uiMode === 'kmweb') {
+            // kmweb 详情页：/series/{id} 或 /oneshot/{id} 的 Hero 封面容器
+            const detailMatch = location.pathname.match(/^\/(series|oneshot)\/([^/?#]+)$/);
+            if (detailMatch) {
+                const $heroCover = $('main section.relative div.cover-aspect').first();
+                if ($heroCover.length > 0 && $heroCover.find('button[komgaseriesid]').length === 0) {
+                    loadSearchBtn($heroCover, detailMatch[2]);
+                }
+            }
+        } else if (uiMode === 'nextui') {
+            // next-ui（Vuetify 3）详情页：Hero 是 ItemPoster 的 v-img（main 内第一个）
+            const detailMatch = location.pathname.match(/^\/(series|oneshot)\/([^/?#]+)$/);
+            if (detailMatch) {
+                const $heroCover = $('main .v-img').first();
+                if ($heroCover.length > 0) {
+                    // v-img 默认不一定是定位上下文，确保按钮绝对定位以海报为基准
+                    if ($heroCover.css('position') === 'static') $heroCover.css('position', 'relative');
+                    if ($heroCover.find('button[komgaseriesid]').length === 0) {
+                        loadSearchBtn($heroCover, detailMatch[2]);
+                    }
+                }
+            }
+        } else {
+            // 仅系列/单行本详情页注入；书籍详情页（/book/{id}）不注入
+            if (/\/(?:series|oneshot)\//.test(location.pathname)) {
+                const $detailCard = $root.find(DETAIL_CARD_SELECTOR).addBack(DETAIL_CARD_SELECTOR).first();
+                if ($detailCard.length > 0 && $detailCard.find('button[komgaseriesid]').length === 0) {
+                    const id = getSeriesIdFromElement($detailCard) || getSeriesIdFromHref(location.href);
+                    if (id) loadSearchBtn($detailCard, id);
+                }
+            }
         }
     }
 
@@ -3329,7 +3445,7 @@ function main() {
     });
 
     let observerIntervalId = setInterval(() => {
-        const targetNode = document.getElementById('app') || document.body;
+        const targetNode = (isKmweb ? document.getElementById('root') : document.getElementById('app')) || document.body;
         if (targetNode) {
             observer.observe(targetNode, { childList: true, subtree: true });
             clearInterval(observerIntervalId);

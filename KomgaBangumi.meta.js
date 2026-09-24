@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.9.19
-// @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token
+// @version      2.10.0
+// @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token（自动适配官方 Komga WebUI 与 kmworks/kmweb 新 UI）
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
 // @include      *://在此处填入你的komga地址/*
