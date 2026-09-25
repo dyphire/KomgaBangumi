@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.10.0
+// @version      2.10.1
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token（自动适配官方 Komga WebUI 与 kmweb/kmrs 新 UI）
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -50,6 +50,22 @@ const maxReqBooks = 500;
 const sourceLabels = ['Btv', 'Bof', 'Mangadex']; // Btv now uses API
 const btvApiUrl = 'https://api.bgm.tv';
 const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject links
+
+// 链接检测：按域名识别已有链接来源，标签命名（Btv/Bangumi/CBL 等写法）不影响识别
+function isLinkUrlOfSource(url, source) {
+    const u = (url || '').replace(/^https?:\/\//i, '').split(/[/?#]/)[0].toLowerCase();
+    const hostIs = (host) => u === host || u.endsWith('.' + host);
+    switch ((source || '').toLowerCase()) {
+        case 'btv':
+            return hostIs('bangumi.tv') || hostIs('bgm.tv') || hostIs('chii.in');
+        case 'bof':
+            return hostIs('bookof.moe');
+        case 'mangadex':
+            return hostIs('mangadex.org');
+        default:
+            return false;
+    }
+}
 const bofUrl = 'https://bookof.moe';
 const mangadexUrl = 'https://mangadex.org';
 const mangadexApiUrl = 'https://api.mangadex.org';
@@ -2994,7 +3010,8 @@ async function search(komgaSeriesId, $dom) {
             .append('<div>' + label + '</div>')
             .attr('sourceLabel', label).css({ ...selPanelBtnStyle });
 
-        const linkObj = komgaMetaLinks.find((link) => link.label && link.label.toLowerCase() === label.toLowerCase());
+        // 按域名识别已有链接（标签命名不再影响识别）
+        const linkObj = komgaMetaLinks.find((link) => link.url && isLinkUrlOfSource(link.url, label));
         if (linkObj) {
              $selSourceBtn.append('<div style="font-size: 10px; color: lightgreen;">(链接已存在)</div>');
              $selSourceBtn.attr('existingUrl', linkObj.url);
@@ -3073,10 +3090,10 @@ async function preciseMatchSeries(komgaSeriesId, oriKomgaTitle, searchType = 'bt
         const seriesName = (komgaMeta?.title?.trim()) || (oriKomgaTitle?.trim()) || (await getKomgaOriTitle(komgaSeriesId))?.trim();
         matchResult.name = seriesName || oriKomgaTitle;
 
-        if (komgaMeta?.links?.find(l => l.label?.toLowerCase() === searchType.toLowerCase() && l.url)) {
+        if (komgaMeta?.links?.find(l => l.url && isLinkUrlOfSource(l.url, searchType))) {
             const forceRefresh = searchType.toLowerCase() === 'btv' && getBatchForceRefreshBtv();
             if (forceRefresh) {
-                const existingLink = komgaMeta.links.find(l => l.label?.toLowerCase() === searchType.toLowerCase() && l.url);
+                const existingLink = komgaMeta.links.find(l => l.url && isLinkUrlOfSource(l.url, searchType));
                 const idMatch = existingLink.url.match(/\/subject\/(\d+)/);
                 const existingId = idMatch ? idMatch[1] : null;
                 if (existingId) {
@@ -3315,7 +3332,7 @@ function addBatchMatchButtonIfNeeded() {
         };
         const pageTypeName = pageTypeNameMap[pageType] || pageType;
 
-        if (confirm(`即将对${pageTypeName}中的系列进行批量精确匹配。\n\n规则：\n- 元数据源：Bangumi API (Btv)\n- 更新类型：仅元数据 (不含封面)\n- 匹配方式：\n  - 若系列已有关联的 Btv 链接，则跳过。\n  - 否则，使用系列标题在 Btv 进行精确搜索。\n  - 精确匹配：搜索结果的中文名/原名/别名与系列标题完全一致。\n- 失败处理：匹配失败的系列将尝试添加至名为 "${MANUAL_MATCH_COLLECTION_NAME}" 的收藏夹中。\n\n是否继续？`)) {
+        if (confirm(`即将对${pageTypeName}中的系列进行批量精确匹配。\n\n规则：\n- 元数据源：Bangumi API (Btv)\n- 更新类型：仅元数据 (不含封面)\n- 匹配方式：\n  - 若系列已有 Bangumi 链接（按域名识别，标签不限），则跳过。\n  - 否则，使用系列标题在 Btv 进行精确搜索。\n  - 精确匹配：搜索结果的中文名/原名/别名与系列标题完全一致。\n- 失败处理：匹配失败的系列将尝试添加至名为 "${MANUAL_MATCH_COLLECTION_NAME}" 的收藏夹中。\n\n是否继续？`)) {
             await batchMatchTarget(pageType, targetId, pageTypeName);
         }
     });
