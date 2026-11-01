@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomgaBangumi
 // @namespace    https://github.com/dyphire/KomgaBangumi
-// @version      2.10.1
+// @version      2.11.0
 // @description  Komga 漫画服务器元数据刮削器，使用 Bangumi API，并支持自定义 Access Token（自动适配官方 Komga WebUI 与 kmweb/kmrs 新 UI）
 // @author       eeezae, ramu, dyphire
 // @include      http://localhost:25600/*
@@ -48,7 +48,7 @@ function getUiMode() {
 
 const maxReqBooks = 500;
 const sourceLabels = ['Btv', 'Bof', 'Mangadex']; // Btv now uses API
-const btvApiUrl = 'https://api.bgm.tv';
+const btvApiUrl = 'https://next.bgm.tv';
 const btvLegacyUrl = 'https://bangumi.tv'; // Still used for direct subject links
 
 // 链接检测：按域名识别已有链接来源，标签命名（Btv/Bangumi/CBL 等写法）不影响识别
@@ -80,6 +80,7 @@ const BANGUMI_ACCESS_TOKEN_KEY = 'komga_bangumi_access_token'; // 用于存储Ba
 const BANGUMI_MATCH_TYPE_KEY = "bangumi_match_type"; // 用于存储匹配类型的键名
 const VOLUME_DATA_FETCH_KEY = 'komga_volume_data_fetch'; // 用于存储是否获取单行本数据的键名
 const BATCH_FORCE_REFRESH_BTV_KEY = 'komga_batch_force_refresh_btv'; // 用于存储批量匹配时是否强制刷新已有btv链接的系列
+const STAFF_CHINESE_NAMES_KEY = 'komga_staff_chinese_names'; // 用于存储Staff数据是否nameCN优先
 
 const bangumiApiHeaders = {
     'User-Agent': `${GM_info.script.name}/${GM_info.script.version} (UserScript; ${GM_info.script.namespace})`,
@@ -100,6 +101,11 @@ function getBangumiMatchType() {
 // 读取是否获取单行本数据，默认 false
 function getVolumeDataFetch() {
     return GM_getValue(VOLUME_DATA_FETCH_KEY, false);
+}
+
+// 读取Staff数据是否nameCN优先，默认 true
+function getStaffChineseNames() {
+    return GM_getValue(STAFF_CHINESE_NAMES_KEY, true);
 }
 
 // 读取批量匹配时是否强制刷新已有btv链接的系列，默认 false
@@ -328,9 +334,28 @@ function showSettingsDialog() {
         forceRefreshBtvSection.appendChild(forceRefreshBtvLabel);
         forceRefreshBtvSection.appendChild(forceRefreshBtvSelect);
 
+        // Staff数据是否nameCN优先设置（对齐 komf archive.staffChineseNames）
+        const staffChineseNamesSection = document.createElement("div");
+        const staffChineseNamesLabel = document.createElement("div");
+        staffChineseNamesLabel.textContent = "Staff数据是否nameCN优先：";
+        staffChineseNamesLabel.style.cssText = "font-size: 16px; margin-bottom: 10px;";
+        const staffChineseNamesSelect = document.createElement("select");
+        staffChineseNamesSelect.style.cssText = "width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px;";
+        const staffCnYesOption = document.createElement("option");
+        staffCnYesOption.value = "true";
+        staffCnYesOption.textContent = "是";
+        const staffCnNoOption = document.createElement("option");
+        staffCnNoOption.value = "false";
+        staffCnNoOption.textContent = "否";
+        staffChineseNamesSelect.appendChild(staffCnYesOption);
+        staffChineseNamesSelect.appendChild(staffCnNoOption);
+        staffChineseNamesSection.appendChild(staffChineseNamesLabel);
+        staffChineseNamesSection.appendChild(staffChineseNamesSelect);
+
         content.appendChild(matchTypeSection);
         content.appendChild(volumeDataSection);
         content.appendChild(forceRefreshBtvSection);
+        content.appendChild(staffChineseNamesSection);
         content.appendChild(tokenSection);
 
         const btnContainer = document.createElement("div");
@@ -426,6 +451,9 @@ function showSettingsDialog() {
             forceRefreshBtvSelect.style.backgroundColor = "#fff";
             forceRefreshBtvSelect.style.color = "#333";
             forceRefreshBtvSelect.style.border = "1px solid #ccc";
+            staffChineseNamesSelect.style.backgroundColor = "#fff";
+            staffChineseNamesSelect.style.color = "#333";
+            staffChineseNamesSelect.style.border = "1px solid #ccc";
             tokenInput.style.backgroundColor = "#fff";
             tokenInput.style.color = "#333";
             tokenInput.style.border = "1px solid #ccc";
@@ -436,11 +464,13 @@ function showSettingsDialog() {
         const currentToken = getBangumiAccessToken();
         const currentVolumeFetch = getVolumeDataFetch();
         const currentForceRefreshBtv = getBatchForceRefreshBtv();
+        const currentStaffChineseNames = getStaffChineseNames();
 
         matchTypeSelect.value = currentMatchType;
         tokenInput.value = currentToken || "";
         volumeDataSelect.value = currentVolumeFetch.toString();
         forceRefreshBtvSelect.value = currentForceRefreshBtv.toString();
+        staffChineseNamesSelect.value = currentStaffChineseNames.toString();
 
         closeBtn.onclick = () => {
             cleanup();
@@ -452,11 +482,13 @@ function showSettingsDialog() {
             const newToken = tokenInput.value.trim();
             const newVolumeFetch = volumeDataSelect.value === "true";
             const newForceRefreshBtv = forceRefreshBtvSelect.value === "true";
+            const newStaffChineseNames = staffChineseNamesSelect.value === "true";
 
             const currentMatchType = getBangumiMatchType();
             const currentToken = getBangumiAccessToken();
             const currentVolumeFetch = getVolumeDataFetch();
             const currentForceRefreshBtv = getBatchForceRefreshBtv();
+            const currentStaffChineseNames = getStaffChineseNames();
 
             let messages = [];
 
@@ -483,6 +515,11 @@ function showSettingsDialog() {
             if (newForceRefreshBtv !== currentForceRefreshBtv) {
                 GM_setValue(BATCH_FORCE_REFRESH_BTV_KEY, newForceRefreshBtv);
                 messages.push(`批量匹配强制刷新已有btv链接的系列: ${newForceRefreshBtv ? "是" : "否"}`);
+            }
+
+            if (newStaffChineseNames !== currentStaffChineseNames) {
+                GM_setValue(STAFF_CHINESE_NAMES_KEY, newStaffChineseNames);
+                messages.push(`Staff数据nameCN优先: ${newStaffChineseNames ? "是" : "否"}`);
             }
 
             if (messages.length > 0) {
@@ -1267,6 +1304,27 @@ function normalizeVolNum(raw) {
 
 }
 //</editor-fold>
+
+// Normalize Next API infobox format [{key, values:[{k?, v}]}] to v0 format [{key, value}]
+function normalizeInfobox(items) {
+    if (!items || !Array.isArray(items)) return [];
+    return items.map(item => {
+        let value;
+        if (item.values && item.values.length > 0) {
+            if (item.values.length === 1 && !item.values[0].k) {
+                value = item.values[0].v;
+            } else {
+                value = item.values.map(v => {
+                    const obj = {};
+                    if (v.k) obj.k = v.k;
+                    if (v.v !== undefined) obj.v = v.v;
+                    return obj;
+                });
+            }
+        }
+        return { key: item.key, value: value };
+    });
+}
 
 // ************************************** API封装 **************************************
 //<editor-fold desc="基本请求封装">
@@ -2199,54 +2257,44 @@ function parseInfobox(infoboxArray, targetKey) {
     return null;
 }
 
-// 辅助函数：提取任意结构中的别名信息
+// 辅助函数：提取别名信息（仅顶层「别名/別名」+ 嵌套子项 k=="别名/別名"；
+// 版本名不写入备选标题；预置主标题 name/name_cn 去重由调用方负责）
 function extractAliases(infoboxArray) {
     const aliases = new Set();
     if (!infoboxArray || !Array.isArray(infoboxArray)) return "";
 
     for (const item of infoboxArray) {
-        // 1. 处理直接别名项（支持简体和繁体）
-        const isAliasKey = item.key === "别名" || item.key === "別名" || item.key === "版本名";
+        const isAliasKey = item.key === "别名" || item.key === "別名";
         if (isAliasKey) {
-            // 处理所有可能的值类型
-            if (typeof item.value === "string") {
-                aliases.add(item.value.trim());
-            } else if (Array.isArray(item.value)) {
-                item.value.forEach(v => {
-                    if (typeof v === "string") {
-                        aliases.add(v.trim());
-                    } else if (v?.v && typeof v.v === "string") {
-                        aliases.add(v.v.trim());
-                    }
-                });
-            } else if (item.value?.v && typeof item.value.v === "string") {
-                aliases.add(item.value.v.trim());
-            }
+            collectAliasValues(item.value, aliases);
         }
-
-        // 2. 处理嵌套别名项（支持简体和繁体）
+        // 嵌套别名：版本条目内 k=="别名/別名" 的子项
         if (Array.isArray(item.value)) {
             for (const subItem of item.value) {
-                // 检查子项是否是别名（支持简体和繁体）
-                const isSubAlias = subItem?.k === "别名" || subItem?.k === "別名" || subItem?.k === "版本名";
-                if (isSubAlias && typeof subItem.v === "string") {
-                    aliases.add(subItem.v.trim());
-                }
-                // 处理嵌套的别名数组
-                else if (isSubAlias && Array.isArray(subItem.v)) {
-                    subItem.v.forEach(alias => {
-                        if (typeof alias === "string") {
-                            aliases.add(alias.trim());
-                        } else if (alias?.v) {
-                            aliases.add(alias.v.trim());
-                        }
-                    });
+                if (subItem?.k === "别名" || subItem?.k === "別名") {
+                    collectAliasValues(subItem.v, aliases);
                 }
             }
         }
     }
 
     return Array.from(aliases).filter(a => a).join(" / ");
+}
+
+function collectAliasValues(value, aliases) {
+    if (typeof value === "string") {
+        aliases.add(value.trim());
+    } else if (Array.isArray(value)) {
+        value.forEach(v => {
+            if (typeof v === "string") {
+                aliases.add(v.trim());
+            } else if (v?.v && typeof v.v === "string") {
+                aliases.add(v.v.trim());
+            }
+        });
+    } else if (value?.v && typeof value.v === "string") {
+        aliases.add(value.v.trim());
+    }
 }
 
 // 组合式 ageRating：API age_rating 优先（0→0 全年龄、1→15、2→18）；
@@ -2266,7 +2314,7 @@ function mapBangumiAgeRating(apiAgeRating, nsfw, tags) {
 }
 
 async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
-    const searchUrl = `${btvApiUrl}/v0/search/subjects?limit=20`;
+    const searchUrl = `${btvApiUrl}/p1/search/subjects?limit=20`;
     const requestBody = {
       keyword: seriesName,
       sort: "match",
@@ -2286,7 +2334,11 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
       }
 
       const matchType = getBangumiMatchType();
-      const filteredData = searchRes.data.filter(item => item.platform === matchType);
+      // Next API: platform is object {typeCN: "漫画"}
+      const filteredData = searchRes.data.filter(item => {
+        const platform = item.platform && item.platform.typeCN ? item.platform.typeCN : item.platform;
+        return platform === matchType;
+      });
 
       if (filteredData.length === 0) {
           console.log(`[fetchBtvSubjectByNameAPI] 搜索 "${seriesName}" 未找到 platform 为 "${matchType}" 的条目。`);
@@ -2304,7 +2356,7 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
                                      parseInfobox(item.infobox, "原作") ||
                                      parseInfobox(item.infobox, "脚本");
               if (authorFromInfo) {
-                  authorName = authorFromInfo.split(/[、→・×]/)[0].replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim(); // 取第一个作为主要作者
+                  authorName = authorFromInfo.split(/[、→×]/)[0].replace(/[《【（\[\(][^》】）\]\)]*[》】）\]\)]\s*$/, '').trim(); // 取第一个作为主要作者
               }
 
               // 提取并处理别名
@@ -2313,11 +2365,11 @@ async function fetchBtvSubjectByNameAPI(seriesName, limit = 8) {
 
           return {
               id: item.id,
-              title: item.name_cn || item.name, // 优先中文名
+              title: item.nameCN || item.name, // 优先中文名 (Next API uses nameCN)
               orititle: item.name, // 原始名
               author: authorName,
               aliases: aliasesString, // 别名
-              cover: item.image || item.images?.medium || item.images?.common || item.images?.small || null, // 优先 image (通常是主封面)
+              cover: item.image || (item.images && item.images.medium) || (item.images && item.images.common) || (item.images && item.images.small) || null, // 优先 image (通常是主封面)
           };
       });
 
@@ -2336,9 +2388,124 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     if (!subjectId) {
         throw new Error("Bangumi Subject ID is missing.");
     }
-    const apiUrl = `${btvApiUrl}/v0/subjects/${subjectId}`;
+    const apiUrl = `${btvApiUrl}/p1/subjects/${subjectId}`;
     const seriesResStr = await asyncReq(apiUrl, 'GET', undefined, {}); // API call
     const btvData = JSON.parse(seriesResStr);
+
+    // --- 辅助函数 ---
+
+    // 剥括号注记：如 "星野真（动画人）" → "星野真"、"エンターブレイン(発行)" → "エンターブレイン"
+    // 支持全角/半角括号对：《》 【】 （） [] ()
+    function stripNameAnnotations(name) {
+        if (!name) return name;
+        return name.replace(/[《【（\[\(][^》】）\[\]\(\)]*[》】）\[\]\(\)]/g, '').trim();
+    }
+
+    // Staff 名拆分：剥注记后按分隔符拆分
+    function cleanStaffNames(name) {
+        if (!name) return [];
+        const stripped = stripNameAnnotations(name);
+        if (!stripped) return [];
+        return stripped.split(/[/／、_→:×&;,，]/).map(s => s.trim()).filter(Boolean);
+    }
+
+    // person 显示名：nameCN 优先（受 STAFF_CHINESE_NAMES_KEY 配置控制）
+    const useCN = getStaffChineseNames();
+    function personDisplayName(p) {
+        if (useCN && p.name_cn) return p.name_cn;
+        return p.name;
+    }
+
+    // 职务 ID → Komga role 映射
+    function mapStaffPositionToRole(position) {
+        const map = { 2001: 'writer', 2002: 'penciller', 2003: 'illustrator', 2007: 'writer', 2009: 'conceptor', 2010: 'writer' };
+        return map[position] || 'writer';
+    }
+
+    // 获取单行本关联（Next API 分页）
+    async function fetchRelations(sid) {
+        const out = [];
+        let offset = 0;
+        const limit = 100;
+        while (true) {
+            const url = `${btvApiUrl}/p1/subjects/${sid}/relations?type=1&offprint=true&limit=${limit}&offset=${offset}`;
+            const resStr = await asyncReq(url, 'GET', undefined, {});
+            const resData = JSON.parse(resStr);
+            const page = resData.data || [];
+            for (const rel of page) {
+                out.push({
+                    id: rel.subject.id,
+                    name: rel.subject.name,
+                    name_cn: rel.subject.nameCN,
+                    relation: rel.relation && rel.relation.cn ? rel.relation.cn : rel.relation,
+                    images: rel.subject.images,
+                    image: rel.subject.image,
+                });
+            }
+            const total = resData.total || 0;
+            if (page.length === 0 || offset + page.length >= total) break;
+            offset += page.length;
+        }
+        return out;
+    }
+
+    // 获取结构化人物关联（Next API 分页）
+    async function fetchStaffs(sid) {
+        const out = [];
+        let offset = 0;
+        const limit = 100;
+        const authorPositionIds = [2001, 2002, 2003, 2007, 2009, 2010];
+        while (true) {
+            const url = `${btvApiUrl}/p1/subjects/${sid}/staffs/persons?limit=${limit}&offset=${offset}`;
+            const resStr = await asyncReq(url, 'GET', undefined, {});
+            const resData = JSON.parse(resStr);
+            const page = resData.data || [];
+            for (const item of page) {
+                for (const pos of (item.positions || [])) {
+                    const position = pos.type && pos.type.id ? pos.type.id : null;
+                    let names = cleanStaffNames(item.staff.name);
+                    if (names.length === 0) names = [item.staff.name];
+                    // nameCN 只剥注记不拆分，单段时保留，多段置空
+                    let nameCN = null;
+                    if (names.length === 1 && item.staff.nameCN) {
+                        const stripped = stripNameAnnotations(item.staff.nameCN);
+                        if (stripped) nameCN = stripped;
+                    }
+                    for (const name of names) {
+                        out.push({
+                            person_id: item.staff.id,
+                            name: name,
+                            name_cn: nameCN,
+                            person_type: item.staff.type,
+                            career: item.staff.career || [],
+                            position: position,
+                            appear_eps: pos.appear_eps || '',
+                        });
+                    }
+                }
+            }
+            const total = resData.total || 0;
+            if (page.length === 0 || offset + page.length >= total) break;
+            offset += page.length;
+        }
+        return out;
+    }
+
+    // --- API 数据归一化 ---
+
+    // Normalize Next API fields to v0-like structure for downstream compatibility
+    // Next API: nameCN, airtime.date, platform.typeCN, infobox=[{key, values:[{k?, v}]}]
+    // Next API 无 age_rating 字段，从 nsfw/tags 推断（对齐 komf map_bangumi_age_rating）
+    const inferredAgeRating = mapBangumiAgeRating(null, btvData.nsfw, (btvData.tags || []).map(t => t.name));
+    const normalizedData = {
+        ...btvData,
+        name_cn: btvData.nameCN || btvData.name_cn,
+        date: btvData.airtime && btvData.airtime.date ? btvData.airtime.date : btvData.date,
+        platform: btvData.platform && btvData.platform.typeCN ? btvData.platform.typeCN : btvData.platform,
+        age_rating: inferredAgeRating,
+        // Normalize infobox: Next API uses [{key, values:[{k?, v}]}] -> v0 [{key, value}]
+        infobox: normalizeInfobox(btvData.infobox || []),
+    };
 
     let seriesMeta = {
         title: '', titleLock: false, titleSort: '', titleSortLock: false,
@@ -2349,27 +2516,27 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         ageRating: null, ageRatingLock: false,
     };
 
-    seriesMeta.title = btvData.name_cn && t2s(btvData.name_cn) || t2s(btvData.name);
+    seriesMeta.title = normalizedData.name_cn && t2s(normalizedData.name_cn) || t2s(normalizedData.name);
     seriesMeta.titleSort = seriesMeta.title;
-    if (btvData.name && btvData.name !== seriesMeta.title) { // If original name differs from CN name
-        seriesMeta.alternateTitles.push({ label: '原名', title: capitalize(btvData.name) });
+    if (normalizedData.name && normalizedData.name !== seriesMeta.title) { // If original name differs from CN name
+        seriesMeta.alternateTitles.push({ label: '原名', title: capitalize(normalizedData.name) });
     }
-    seriesMeta.summary = (btvData.summary || '')
+    seriesMeta.summary = (normalizedData.summary || '')
       .replace(/\r\n|\r/g, '\n')        // 统一换行
       .split('\n')
       .map(line => line.replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''))  // 去除每行前后空格（含全角空格）
       .join('\n')
       .trim();
 
-    seriesMeta.totalBookCount = btvData.volumes || btvData.eps || btvData.total_episodes || null;
+    seriesMeta.totalBookCount = normalizedData.volumes || normalizedData.eps || normalizedData.total_episodes || null;
 
     seriesMeta.genres = komgaSeries.genres || [];
-    seriesMeta.genres.push(btvData.platform);
+    seriesMeta.genres.push(normalizedData.platform);
 
     const statusTags = ["连载", "连载中", "完结", "已完结", "腰斩", "停刊", "长期休载", "停止连载", "休刊"];
 
-    if (btvData.tags && btvData.tags.length > 0) {
-        const rawApiTags = btvData.tags
+    if (normalizedData.tags && normalizedData.tags.length > 0) {
+        const rawApiTags = normalizedData.tags
             .map(t => ({ name: t.name, count: t.count }))
             .filter(tag => tagLabels.includes(tag.name + ',') && !statusTags.includes(tag.name));
 
@@ -2404,7 +2571,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
     }
 
-    seriesMeta.ageRating = mapBangumiAgeRating(btvData.age_rating, btvData.nsfw, seriesMeta.tags);
+    seriesMeta.ageRating = mapBangumiAgeRating(normalizedData.age_rating, normalizedData.nsfw, seriesMeta.tags);
 
     // 追加识别系列文件夹名称中的出版社/汉化信息
     const publisherKeywords = [
@@ -2423,8 +2590,8 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         seriesMeta.tags.push(matchedKeyword);
     }
 
-    if (btvData.rating && typeof btvData.rating.score === 'number' && btvData.rating.score > 0) {
-        seriesMeta.tags.push(`${Math.round(btvData.rating.score)}分`);
+    if (normalizedData.rating && typeof normalizedData.rating.score === 'number' && normalizedData.rating.score > 0) {
+        seriesMeta.tags.push(`${Math.round(normalizedData.rating.score)}分`);
     }
 
     if (seriesMeta.tags && seriesMeta.tags.length > 0) {
@@ -2437,13 +2604,56 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         }
     }
 
-    const infobox = btvData.infobox || [];
+    const infobox = normalizedData.infobox || [];
     let resAuthors = [];
     let seriesIndividualAliases = []; // For aliases from infobox
 
+    // 获取结构化人物关联（Next API 分页），对齐 komf next_staff_to_persons
+    let staffs = [];
+    try {
+        staffs = await fetchStaffs(subjectId);
+    } catch (e) {
+        console.warn(`[BtvAPI] 获取人物关联失败:`, e);
+    }
+
+    // person 显示名：nameCN 优先
+    function personDisplayName(p) {
+        if (p.name_cn) return p.name_cn;
+        return p.name;
+    }
+
+    // 职务 ID → Komga role 映射
+    function mapStaffPositionToRole(position) {
+        const map = { 2001: 'writer', 2002: 'penciller', 2003: 'illustrator', 2007: 'writer', 2009: 'conceptor', 2010: 'writer' };
+        return map[position] || 'writer';
+    }
+
     let publisherVal = parseInfobox(infobox, '出版社') || parseInfobox(infobox, '连载杂志') || parseInfobox(infobox, '制作');
     if (publisherVal) {
-        seriesMeta.publisher = t2s(publisherVal.split(/[/／、_→×&,，]/)[0].trim()); // Take first publisher, convert to simplified
+        // 分隔符拆分：第一个为 publisher，其余进 alternative（剥注记+拆分）
+        const publishers = cleanStaffNames(publisherVal);
+        if (publishers.length > 0) {
+            // persons 仅做 nameCN 映射（匹配到时 nameCN 优先）
+            const primaryRaw = publishers[0];
+            const personMatch = staffs.find(p => p.position === 2004 && (p.name === primaryRaw || (p.name_cn && p.name_cn === primaryRaw)));
+            seriesMeta.publisher = personMatch ? personDisplayName(personMatch) : t2s(primaryRaw);
+            // alternative_publishers = 出版社.drop(1) + 其他出版社
+            const altPublishers = [];
+            for (let i = 1; i < publishers.length; i++) {
+                const altRaw = publishers[i];
+                const altMatch = staffs.find(p => p.position === 2004 && (p.name === altRaw || (p.name_cn && p.name_cn === altRaw)));
+                altPublishers.push({ name: altMatch ? personDisplayName(altMatch) : t2s(altRaw), type: 'LOCALIZED' });
+            }
+            const otherPubVal = parseInfobox(infobox, '其他出版社');
+            if (otherPubVal) {
+                const otherPubs = cleanStaffNames(otherPubVal);
+                for (const op of otherPubs) {
+                    const opMatch = staffs.find(p => p.position === 2004 && (p.name === op || (p.name_cn && p.name_cn === op)));
+                    altPublishers.push({ name: opMatch ? personDisplayName(opMatch) : t2s(op), type: 'LOCALIZED' });
+                }
+            }
+            seriesMeta.alternative_publishers = altPublishers;
+        }
     } else if (matchedKeyword && !seriesMeta.publisher) {
         seriesMeta.publisher = matchedKeyword;
     }
@@ -2453,18 +2663,34 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         '作者': 'writer', '原作': 'writer', '分镜': 'writer', '脚本·分镜': 'writer', '脚本': 'writer', '漫画家': 'writer',
         '作画': 'penciller', '插图': 'illustrator', '插画家': 'illustrator', '人物原案': 'conceptor', '人物设定': 'designer',
         '原案': 'story', '系列构成': 'scriptwriter', '铅稿': 'penciller', '上色': 'colorist'
-        // Add more roles as needed and map them to Komga's supported roles
     };
-    for (const [key, role] of Object.entries(authorRoles)) {
-        let val = parseInfobox(infobox, key);
-        console.log(`[baseAsyncReq] Success (${val}...`);
-        if (val) {
-            val.replace(/[《【（\[\(（][^》】）\]\)）]*[》】）\]\)）]/g, '').split(/[/／、_→・:×&,，]/).forEach(name => { // Handle multiple authors for the same role
-                const trimmedName = name.trim();
-                if (trimmedName && !resAuthors.some(a => a.name === trimmedName && a.role === role)) {
-                    resAuthors.push({ name: t2s(trimmedName), role: role });
+    const authorPositionIds = [2001, 2002, 2003, 2007, 2009, 2010];
+    // persons 有作者类职务时作为实体来源（nameCN 优先）；否则回退 infobox
+    const authorPersons = staffs.filter(p => p.position && authorPositionIds.includes(p.position));
+    if (authorPersons.length > 0) {
+        // persons 为实体来源：一个 person 的多个职务拆成多条
+        const seen = new Set();
+        for (const p of authorPersons) {
+            const name = personDisplayName(p);
+            const role = mapStaffPositionToRole(p.position);
+            const key = `${name}|${role}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                resAuthors.push({ name: t2s(name), role: role });
+            }
+        }
+    } else {
+        // 回退路径：persons 无作者类职务时走 infobox 提取
+        for (const [key, role] of Object.entries(authorRoles)) {
+            let val = parseInfobox(infobox, key);
+            if (val) {
+                const names = cleanStaffNames(val);
+                for (const name of names) {
+                    if (name && !resAuthors.some(a => a.name === name && a.role === role)) {
+                        resAuthors.push({ name: t2s(name), role: role });
+                    }
                 }
-            });
+            }
         }
     }
     const hasWriter = resAuthors.some(a => a.role === 'writer');
@@ -2498,7 +2724,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     seriesIndividualAliases.forEach(alias => {
         const aliasLower = alias.toLowerCase();
         const titleLower = seriesMeta.title ? seriesMeta.title.toLowerCase() : '';
-        const oriNameLower = btvData.name ? btvData.name.toLowerCase() : '';
+        const oriNameLower = normalizedData.name ? normalizedData.name.toLowerCase() : '';
         // Add if not empty, not same as title, not same as original name, and not already in alternateTitles
         if (alias && aliasLower !== titleLower && aliasLower !== oriNameLower &&
             !seriesMeta.alternateTitles.some(at => at.title.toLowerCase() === aliasLower)) {
@@ -2530,7 +2756,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     // Filter out null or empty string values, but allow empty arrays (for tags, links etc.)
     finalMeta = Object.fromEntries(Object.entries(finalMeta).filter(([_, v]) => v !== null && v !== '' || Array.isArray(v)));
 
-    const seriesNameForDisplay = finalMeta.title || btvData.name_cn || btvData.name || '未知系列';
+    const seriesNameForDisplay = finalMeta.title || normalizedData.name_cn || normalizedData.name || '未知系列';
     await updateKomgaSeriesMeta(komgaSeriesId, seriesNameForDisplay, finalMeta);
 
     // 匹配成功后，如果系列在手动匹配收藏夹中，则自动移除
@@ -2539,14 +2765,14 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
 
     // --- 获取系列和卷的多种封面尺寸 ---
     const seriesCoverUrls = [];
-    if (btvData.images) { // 主条目的图片
-        if (btvData.images.large) seriesCoverUrls.push(btvData.images.large);
-        if (btvData.images.medium) seriesCoverUrls.push(btvData.images.medium);
-        if (btvData.images.common) seriesCoverUrls.push(btvData.images.common);
-        // if (btvData.images.small) seriesCoverUrls.push(btvData.images.small); // Usually too small
+    if (normalizedData.images) { // 主条目的图片
+        if (normalizedData.images.large) seriesCoverUrls.push(normalizedData.images.large);
+        if (normalizedData.images.medium) seriesCoverUrls.push(normalizedData.images.medium);
+        if (normalizedData.images.common) seriesCoverUrls.push(normalizedData.images.common);
+        // if (normalizedData.images.small) seriesCoverUrls.push(normalizedData.images.small); // Usually too small
     }
-    if (btvData.image && !seriesCoverUrls.includes(btvData.image)) { // `image` field is often the primary cover.
-        seriesCoverUrls.unshift(btvData.image); // Add to front as highest priority if different
+    if (normalizedData.image && !seriesCoverUrls.includes(normalizedData.image)) { // `image` field is often the primary cover.
+        seriesCoverUrls.unshift(normalizedData.image); // Add to front as highest priority if different
     }
     const uniqueSeriesCoverUrls = [...new Set(seriesCoverUrls.filter(Boolean))]; // 去重和去空
 
@@ -2556,10 +2782,7 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
     const needUpdateVolumeNums = getVolumeNumsNeedUpdate(seriesBooks);
     const needFetchVolumeData = getVolumeDataFetch();
 
-    // 过滤单行本卷，排序
-    const relatedSubjectsApiUrl = `${btvApiUrl}/v0/subjects/${subjectId}/subjects`;
-    const relatedSubjectsStr = await asyncReq(relatedSubjectsApiUrl, 'GET', undefined, {});
-    const relatedSubjects = JSON.parse(relatedSubjectsStr);
+    const relatedSubjects = await fetchRelations(subjectId);
     const volumes = relatedSubjects
         .filter(rel => rel.relation === "单行本")
         .sort((a, b) => {
@@ -2592,9 +2815,14 @@ async function fetchBtvSubjectByUrlAPI(komgaSeriesId, reqSeriesId, reqSeriesUrl 
         let summary = '', releaseDate = '', isbn = '';
         if (isNeedUpdate && needFetchVolumeData) {
             try {
-                const volDetailStr = await asyncReq(`${btvApiUrl}/v0/subjects/${vol.id}`, 'GET', undefined, {});
-                const volDetail = JSON.parse(volDetailStr);
-
+                const volDetailStr = await asyncReq(`${btvApiUrl}/p1/subjects/${vol.id}`, 'GET', undefined, {});
+                const volDetailRaw = JSON.parse(volDetailStr);
+                // Normalize Next API fields to v0-like structure
+                const volDetail = {
+                    ...volDetailRaw,
+                    name_cn: volDetailRaw.nameCN || volDetailRaw.name_cn,
+                    infobox: normalizeInfobox(volDetailRaw.infobox || []),
+                };
                 summary = (volDetail.summary || '')
                     .replace(/\r\n|\r/g, '\n')
                     .split('\n')
